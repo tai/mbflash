@@ -92,10 +92,8 @@ New Project dialog (same tab, then `#editor`) and labels it. `--no-create`
 turns a missing label into an error. Pass `--retitle` to also change the tab
 title. The project name and the downloaded hex use the label.
 
-`--set-label` sets `sessionStorage["mbflash.label"]` and changes the tab title
-to `MakeCode — <label>`, so the browser tab strip shows which project is which.
-Labels survive reloads, though MakeCode may reset the title; `--list` always
-reads the stored label.
+Labels survive reloads; `--list` always reads the stored label. The tab title
+is cosmetic and can be set explicitly with `--retitle`.
 
 Practical notes for multiple projects:
 
