@@ -14,7 +14,7 @@ import path from "node:path";
 import os from "node:os";
 import { execFileSync } from "node:child_process";
 
-const VERSION = "1.0.0";
+const VERSION = "1.1.0";
 const DEFAULT_HOST = "makecode.microbit.org";
 const DEFAULT_CDP = "127.0.0.1:9222";
 
@@ -63,6 +63,8 @@ function defaults() {
     label: undefined,
     setLabel: undefined,
     switch: false,
+    create: true,
+    retitle: false,
     focus: true,
     source: undefined,
     loadOnly: false,
@@ -168,6 +170,12 @@ function parseArgs(argv) {
       case "--switch":
         o.switch = true;
         break;
+      case "--no-create":
+        o.create = false;
+        break;
+      case "--retitle":
+        o.retitle = true;
+        break;
       case "--no-focus":
         o.focus = false;
         break;
@@ -229,6 +237,7 @@ function resolveMode(o) {
   if (explicit.length > 1) {
     usage("choose only one of --load-only, --hex-only, --flash-only, --flash-hex");
   }
+  if (o.retitle && !o.label && !o.setLabel) usage("--retitle needs --label or --set-label");
 
   if (o.switch) {
     if (o.source !== undefined || o.loadOnly || o.hexOnly || o.flashOnly || o.flashHex) {
@@ -240,7 +249,7 @@ function resolveMode(o) {
 
   if (o.flashHex) {
     if (o.source !== undefined) usage("--flash-hex does not take a source file");
-    if (o.label || o.setLabel) usage("--label/--set-label require a browser tab");
+    if (o.label || o.setLabel || o.retitle) usage("--label/--set-label/--retitle require a browser tab");
     if (o.noBlocks || o.roundtrip) usage("--no-blocks/--roundtrip only apply when loading a source");
     return "flash-hex";
   }
@@ -292,8 +301,10 @@ Target selection:
   --host <hostname>      tab hostname match (default ${DEFAULT_HOST})
   --url <substr|/re/>    tab URL match
   --title <substr>       tab title match
-  --label <name>         select a tab by its per-tab mbflash label
-  --set-label <name>     tag the selected tab and retitle it
+  --label <name>         select a tab by label (creates the project if missing)
+  --set-label <name>     tag the selected tab (sessionStorage only; no title)
+  --retitle              set the tab title to "MakeCode — <label>"
+  --no-create            with --label, fail instead of creating a project
   --target <id>          exact CDP page target id (from --list)
   --index <n>            1-based choice among matches
   --no-focus             do not bring the selected tab to front
@@ -326,8 +337,9 @@ Examples:
   mbflash --cdp 192.168.1.50:9222 --url makecode main.ts
   mbflash --list
   mbflash --target <id> --set-label Test1
-  mbflash --label Test1 --switch
+  mbflash --label Test1 --switch --retitle
   mbflash --label Test2 main.ts
+  mbflash --label Test3 main.ts       # creates Test3 if it does not exist
 `);
 }
 
@@ -409,8 +421,11 @@ async function pageLabel(page) {
   }
 }
 
-async function selectPage(pages, o) {
-  if (!pages.length) throw new Error("no page targets at the CDP endpoint");
+async function selectPage(pages, o, { allowMissingLabel = false } = {}) {
+  if (!pages.length) {
+    if (allowMissingLabel && o.label) return null;
+    throw new Error("no page targets at the CDP endpoint");
+  }
 
   if (o.target) {
     const p = pages.find((x) => x.id === o.target);
@@ -427,6 +442,7 @@ async function selectPage(pages, o) {
   }
 
   if (!matches.length) {
+    if (allowMissingLabel && o.label) return null;
     throw new Error(o.label ? `no tab labelled "${o.label}"; use --list` : "no tab matched; use --list to see page targets");
   }
 
@@ -441,6 +457,132 @@ async function selectPage(pages, o) {
 
   const list = matches.map((p) => `  [${p.id}] ${p.url}`).join("\n");
   throw new Error(`${matches.length} tabs matched; use --target <id>, --label <name>, or --index <n>:\n${list}`);
+}
+
+function makecodeHomeUrl(target, pages, o) {
+  const host = o.host || DEFAULT_HOST;
+  const existing = pages.find((p) => {
+    try {
+      return new URL(p.url).hostname === host;
+    } catch {
+      return false;
+    }
+  });
+  if (existing) {
+    try {
+      return new URL(existing.url).origin + "/";
+    } catch {
+      /* fall through */
+    }
+  }
+  return `https://${host}/`;
+}
+
+async function createNewProjectTab(target, name, o, pages) {
+  const version = await fetch(`${target.base}/json/version`, { signal: AbortSignal.timeout(5000) }).then((r) => r.json());
+  if (!version.webSocketDebuggerUrl) throw new Error("CDP endpoint did not advertise a browser websocket");
+
+  const browser = await Cdp.connect(version.webSocketDebuggerUrl, 10000);
+  let targetId;
+  try {
+    const url = makecodeHomeUrl(target, pages, o);
+    debug(`creating tab at ${url}`);
+    const r = await browser.send("Target.createTarget", { url }, 15000);
+    targetId = r.targetId;
+  } finally {
+    browser.close();
+  }
+  if (!targetId) throw new Error("Target.createTarget returned no targetId");
+
+  const deadline = Date.now() + 20000;
+  for (;;) {
+    const now = await fetchPages(target);
+    const page = now.find((p) => p.id === targetId);
+    if (page) return page;
+    if (Date.now() > deadline) throw new Error("new tab did not appear at the CDP endpoint");
+    await sleep(250);
+  }
+}
+
+async function initNewProject(cdp, name) {
+  const deadline = Date.now() + 30000;
+  let openedDialog = false;
+
+  // Wait for the home page (or a dialog already open), then open New Project.
+  for (;;) {
+    const s = await cdp
+      .ev(`(() => ({
+        href: location.href,
+        card: !!document.querySelector('.newprojectcard'),
+        menu: !!document.querySelector('[aria-label="New Project"]'),
+        input: !!document.querySelector('#projectNameInput'),
+        editor: !!document.querySelector('[aria-label="Convert code to Blocks"]'),
+      }))()`)
+      .catch(() => ({ href: "", card: false, menu: false, input: false, editor: false }));
+
+    if (s.input) break;
+    if (s.editor) {
+      // Already in an editor (unexpected for a fresh tab, but harmless).
+      const projectName = await cdp.ev(`document.querySelector('#fileNameInput2')?.value || ''`).catch(() => "");
+      return { projectName: projectName || null, alreadyEditor: true };
+    }
+    if ((s.card || s.menu) && !openedDialog) {
+      const clicked = await cdp
+        .ev(`(() => {
+          const b = document.querySelector('.newprojectcard') || document.querySelector('[aria-label="New Project"]');
+          if (!b) return false;
+          b.click();
+          return true;
+        })()`)
+        .catch(() => false);
+      debug(`clicked New Project: ${clicked}`);
+      if (clicked) openedDialog = true;
+    }
+
+    if (Date.now() > deadline) throw new Error("New Project dialog did not appear");
+    await sleep(300);
+  }
+
+  const setValue = await cdp.ev(`(() => {
+    const input = document.querySelector('#projectNameInput');
+    if (!input) return false;
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+    setter.call(input, ${JSON.stringify(name)});
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    return input.value;
+  })()`);
+  debug(`project name input: ${setValue}`);
+  if (!setValue) throw new Error("could not set the new project name");
+
+  await sleep(250);
+  const create = await cdp.ev(`(() => {
+    const b = [...document.querySelectorAll('.ReactModal__Content button, .ui.modal button')]
+      .find(x => (x.textContent || '').trim() === 'Create');
+    if (!b) return 'no-button';
+    if (b.disabled) return 'disabled';
+    b.click();
+    return 'clicked';
+  })()`).catch(() => "navigated");
+  if (create !== "clicked" && create !== "navigated") {
+    throw new Error(`could not submit the New Project dialog (${create})`);
+  }
+
+  // Clicking Create navigates the tab to #editor; the target id stays the same.
+  await waitForEditor(cdp);
+
+  // The hash can settle a moment after the editor DOM appears.
+  for (let i = 0; i < 20; i++) {
+    const href = await cdp.ev(`location.href`).catch(() => "");
+    if (href.includes("#editor")) break;
+    await sleep(100);
+  }
+
+  const projectName = await cdp.ev(`document.querySelector('#fileNameInput2')?.value || ''`).catch(() => "");
+  if (projectName && projectName !== name) {
+    warn(`project name is "${projectName}", expected "${name}"`);
+  }
+  return { projectName: projectName || name };
 }
 
 function normalizeWsUrl(page, target) {
@@ -1128,7 +1270,18 @@ async function main() {
     } else {
       const target = parseCdpTarget(o.cdp);
       const pages = await fetchPages(target);
-      const page = await selectPage(pages, o);
+      let page = await selectPage(pages, o, { allowMissingLabel: !!o.label && o.create });
+      let created = false;
+      let createStart = 0;
+
+      if (!page) {
+        createStart = Date.now();
+        step(`No tab labelled "${o.label}"; creating a new project...`);
+        page = await createNewProjectTab(target, o.label, o, pages);
+        created = true;
+        result.created = true;
+      }
+
       const wsUrl = normalizeWsUrl(page, target);
 
       debug(`CDP ${target.base}, browser ${await fetch(`${target.base}/json/version`)
@@ -1140,23 +1293,42 @@ async function main() {
       cdp = await Cdp.connect(wsUrl);
       if (o.focus) await cdp.send("Page.bringToFront").catch(() => {});
 
+      if (created) {
+        await initNewProject(cdp, o.label);
+        result.timings.create = Date.now() - createStart;
+        step(`Created ${o.label} (${fmt(result.timings.create)})`);
+      } else {
+        await waitForEditor(cdp);
+      }
+
       let tabLabel = o.label || null;
       if (o.setLabel) {
         tabLabel = o.setLabel;
         await cdp.ev(`(() => {
           sessionStorage.setItem('mbflash.label', ${JSON.stringify(o.setLabel)});
-          document.title = 'MakeCode — ' + ${JSON.stringify(o.setLabel)};
           return sessionStorage.getItem('mbflash.label');
         })()`);
         if (mode !== "label") step(`Labelled ${page.id} as ${o.setLabel}`);
-      } else if (o.label) {
-        // Restore the visible title when selecting by label; the app may have
-        // reset document.title on reload or project load.
-        await cdp
-          .ev(`document.title = 'MakeCode — ' + ${JSON.stringify(o.label)}`)
-          .catch(() => {});
+      } else if (created && o.label) {
+        // A new project is addressed by the label that created it; store it so
+        // future --label calls find the tab without relying on its title.
+        const stored = await cdp.ev(`(() => {
+          sessionStorage.setItem('mbflash.label', ${JSON.stringify(o.label)});
+          return sessionStorage.getItem('mbflash.label');
+        })()`);
+        if (stored !== o.label) warn(`could not store the label "${o.label}" on the new tab`);
       }
-      result.tab = { id: page.id, label: tabLabel, url: page.url };
+      if (o.retitle) {
+        const label = o.setLabel || o.label;
+        await cdp.ev(`document.title = 'MakeCode — ' + ${JSON.stringify(label)}`).catch(() => {});
+      }
+
+      const currentUrl = await cdp.ev(`location.href`).catch(() => page.url);
+      result.tab = { id: page.id, label: tabLabel, url: currentUrl };
+      const projectName = await cdp
+        .ev(`document.querySelector('#fileNameInput2')?.value || ''`)
+        .catch(() => "");
+      if (projectName) result.tab.projectName = projectName;
 
       if (mode === "label" || mode === "switch") {
         out(
@@ -1168,8 +1340,6 @@ async function main() {
         if (ui.json) console.log(JSON.stringify(result, null, 2));
         return 0;
       }
-
-      await waitForEditor(cdp);
 
       let blocks = null;
       let markers = [];
@@ -1229,7 +1399,7 @@ async function main() {
       }
     }
 
-    if ((o.setLabel || o.label) && cdp) {
+    if (o.retitle && (o.setLabel || o.label) && cdp) {
       const label = o.setLabel || o.label;
       await cdp.ev(`document.title = 'MakeCode — ' + ${JSON.stringify(label)}`).catch(() => {});
     }

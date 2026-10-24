@@ -59,6 +59,12 @@ on `PATH`, add it or invoke `./mbflash.mjs` directly.
 want a `.hex`. `--flash-only` skips loading but still builds. `--switch` is the
 tab manager: select by label/target and bring it to the front.
 
+If `--label` does not match an existing tab, `mbflash` creates a new project
+with that name by driving the home page’s **New Project** dialog (open the home
+tab, fill `#projectNameInput`, click **Create**, wait for the editor, label the
+tab). Use `--no-create` to make a missing label an error instead. Creation adds
+about 2–3 s.
+
 ## Multiple tabs / projects
 
 All MakeCode tabs have the same URL and title. `mbflash` identifies them by
@@ -67,11 +73,24 @@ All MakeCode tabs have the same URL and title. `mbflash` identifies them by
 
 ```sh
 mbflash --list                          # ids, labels, URLs
-mbflash --target <id> --set-label Test1 # tag a tab; also retitles it
+mbflash --target <id> --set-label Test1 # tag a tab (sessionStorage; no retitle)
+mbflash --target <id> --set-label Test1 --retitle
 mbflash --label Test1 --switch          # focus Test1, no build
 mbflash --label Test1 main.ts           # load/build/flash Test1 only
 mbflash --label Test2 --hex-only        # build Test2's current code
+mbflash --label Test3 main.ts           # create Test3 if missing
+mbflash --label Test3 --switch          # create + focus an empty Test3
 ```
+
+`--set-label` stores `sessionStorage["mbflash.label"]`; that label is the
+primary identifier and is what `--label` matches. **The tab title is not used
+for matching.** Add `--retitle` if you also want the visible title changed to
+`MakeCode — <label>`.
+
+If `--label` is missing, `mbflash` creates the project through the home page’s
+New Project dialog (same tab, then `#editor`) and labels it. `--no-create`
+turns a missing label into an error. Pass `--retitle` to also change the tab
+title. The project name and the downloaded hex use the label.
 
 `--set-label` sets `sessionStorage["mbflash.label"]` and changes the tab title
 to `MakeCode — <label>`, so the browser tab strip shows which project is which.
@@ -107,7 +126,10 @@ mbflash --url makecode main.ts             # URL substring or /regex/
 mbflash --title "MakeCode" main.ts         # title substring
 mbflash --host makecode.microbit.org main.ts
 mbflash --label Test1 --switch             # focus a labelled tab
-mbflash --target <id> --set-label Test1    # tag a tab
+mbflash --label Test1 --switch --retitle   # focus + set the visible title
+mbflash --label Test3 main.ts              # create Test3 if missing
+mbflash --target <id> --set-label Test1    # tag a tab (no title change)
+mbflash --label NoSuch --switch --no-create # error instead of creating
 ```
 
 The default tab match is the exact hostname `makecode.microbit.org`. If more

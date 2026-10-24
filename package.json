@@ -1,6 +1,6 @@
 {
   "name": "mbflash",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Load, build and flash micro:bit MakeCode projects over CDP",
   "type": "module",
   "bin": {
