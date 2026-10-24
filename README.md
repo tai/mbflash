@@ -1,6 +1,7 @@
 # mbflash
 
 [![CI](https://github.com/tai/mbflash/actions/workflows/ci.yml/badge.svg)](https://github.com/tai/mbflash/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/mbflash.svg)](https://www.npmjs.com/package/mbflash)
 
 A dependency-free CLI for driving the micro:bit MakeCode editor over CDP:
 load TypeScript, commit it to Blocks, compile/download the `.hex`, and flash it
@@ -35,7 +36,7 @@ That one command:
 
 ## Install
 
-From npm (after publishing):
+From npm:
 
 ```sh
 npm install -g mbflash
@@ -256,7 +257,7 @@ git tag v1.2.0      # use the new version
 git push origin main --tags
 ```
 
-The `Publish npm` workflow runs on a published GitHub release (or manually) and
-expects an `NPM_TOKEN` repository secret. Keep the repository public for npm
-provenance. `npm pack --dry-run` shows exactly what would be published:
+The `Publish npm` workflow runs on a published GitHub release (or manually). It
+skips publishing when the version already exists on npm; otherwise it expects an
+`NPM_TOKEN` repository secret. Keep the repository public for npm provenance. `npm pack --dry-run` shows exactly what would be published:
 `mbflash.mjs`, `README.md`, `LICENSE`, and `package.json`.
