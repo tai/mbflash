@@ -1,0 +1,14 @@
+{
+  "name": "mbflash",
+  "version": "1.0.0",
+  "description": "Load, build and flash micro:bit MakeCode projects over CDP",
+  "type": "module",
+  "bin": {
+    "mbflash": "./mbflash.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "private": true,
+  "license": "MIT"
+}
