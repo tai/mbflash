@@ -274,7 +274,7 @@ Output and device:
   --hex-out <path>       copy the built .hex here
   --device <mount>       MICROBIT mount (default: auto-detect)
   --wait <seconds>       flash timeout (default 60)
-  --timeout <seconds>    build/editor timeout (default 120)
+  --timeout <seconds>    build/download timeout (default 120)
 
 Loading:
   --no-blocks            load TS only; do not convert to Blocks

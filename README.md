@@ -82,7 +82,7 @@ mbflash --download-dir ./build main.ts     # where Chromium writes the .hex
 mbflash --hex-out ./demo.hex main.ts       # copy the built hex here
 mbflash --device /run/media/$USER/MICROBIT main.ts
 mbflash --wait 90 main.ts                  # flash timeout (s)
-mbflash --timeout 180 main.ts              # build/editor timeout (s)
+mbflash --timeout 180 main.ts              # build/download timeout (s)
 ```
 
 `--download-dir` defaults to `$XDG_CACHE_HOME/mbflash/hex` (usually
