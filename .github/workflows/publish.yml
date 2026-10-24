@@ -16,7 +16,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          # Node 24 ships npm >= 11.5.1, which trusted publishing requires.
+          node-version: 24
           registry-url: https://registry.npmjs.org
 
       - name: Check whether this version is already on npm
@@ -25,7 +26,9 @@ jobs:
           VERSION=$(node -p "require('./package.json').version")
           PUBLISHED=false
           for i in 1 2 3 4 5 6 7 8; do
-            if npm view "mbflash@$VERSION" version >/dev/null 2>&1; then
+            # Cache-busting query: the registry edge caches packuments for
+            # 5 minutes, which can hide a just-published version.
+            if curl -sf "https://registry.npmjs.org/mbflash/$VERSION?t=$(date +%s%N)" >/dev/null; then
               PUBLISHED=true
               break
             fi
@@ -35,6 +38,6 @@ jobs:
 
       - name: Publish to npm
         if: steps.check.outputs.published == 'false'
+        # Auth comes from the OIDC trusted publisher configured on npmjs.com;
+        # no NPM_TOKEN secret is involved.
         run: npm publish --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

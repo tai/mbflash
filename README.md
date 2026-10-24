@@ -253,11 +253,13 @@ This repository is <https://github.com/tai/mbflash>.
 ```sh
 npm test
 npm publish
-git tag v1.2.0      # use the new version
+git tag v1.2.1      # use the new version
 git push origin main --tags
 ```
 
 The `Publish npm` workflow runs on a published GitHub release (or manually). It
-skips publishing when the version already exists on npm; otherwise it expects an
-`NPM_TOKEN` repository secret. Keep the repository public for npm provenance. `npm pack --dry-run` shows exactly what would be published:
+skips publishing when the version already exists on npm; otherwise it publishes
+with the OIDC trusted publisher configured for this repository on npmjs.com, so
+no npm secret is stored in GitHub. Keep the repository public for npm
+provenance. `npm pack --dry-run` shows exactly what would be published:
 `mbflash.mjs`, `README.md`, `LICENSE`, and `package.json`.
