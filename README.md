@@ -27,7 +27,7 @@ That one command:
            "https://makecode.microbit.org/#editor"
   ```
 
-- One or more MakeCode tabs. Select the intended one with `--label`,
+- One or more MakeCode tabs. Select the intended one with `--project`,
   `--target`, or `--index`; ambiguous matches are refused.
 - The micro:bit mounted as `MICROBIT` (normally `/run/media/$USER/MICROBIT`).
 
@@ -53,47 +53,47 @@ on `PATH`, add it or invoke `./mbflash.mjs` directly.
 | `mbflash --hex-only` | build/download the code already in the editor |
 | `mbflash --flash-only` | build/flash the code already in the editor |
 | `mbflash --flash-hex demo.hex` | flash an existing `.hex` (no CDP) |
-| `mbflash --label Test1 --switch` | focus the Test1 tab (no build) |
+| `mbflash --project Test1 --switch` | focus the Test1 project (no build) |
 
 `--hex-only` with no file is useful when a human has edited Blocks and you just
 want a `.hex`. `--flash-only` skips loading but still builds. `--switch` is the
-tab manager: select by label/target and bring it to the front.
+tab manager: select by **project name** or target and bring it to the front.
 
-If `--label` does not match an existing tab, `mbflash` creates a new project
+If `--project` does not match an existing tab, `mbflash` creates a new project
 with that name by driving the home page’s **New Project** dialog (open the home
-tab, fill `#projectNameInput`, click **Create**, wait for the editor, label the
-tab). Use `--no-create` to make a missing label an error instead. Creation adds
-about 2–3 s.
+tab, fill `#projectNameInput`, click **Create**, wait for the editor). Use
+`--no-create` to make a missing project an error instead. Creation adds about
+2–3 s.
 
 ## Multiple tabs / projects
 
 All MakeCode tabs have the same URL and title. `mbflash` identifies them by
-**CDP target id** and by an optional **per-tab label** stored in
-`sessionStorage` (not shared between tabs).
+**CDP target id** and the **MakeCode project name** — the project header /
+`pxt.json` name, read from the editor’s project-name field. No sidecar metadata
+is written, and the tab title is not used for matching.
 
 ```sh
-mbflash --list                          # ids, labels, URLs
-mbflash --target <id> --set-label Test1 # tag a tab (sessionStorage; no retitle)
-mbflash --target <id> --set-label Test1 --retitle
-mbflash --label Test1 --switch          # focus Test1, no build
-mbflash --label Test1 main.ts           # load/build/flash Test1 only
-mbflash --label Test2 --hex-only        # build Test2's current code
-mbflash --label Test3 main.ts           # create Test3 if missing
-mbflash --label Test3 --switch          # create + focus an empty Test3
+mbflash --list                          # ids, project names, URLs
+mbflash --project Test1 --switch        # focus Test1, no build
+mbflash --project Test1 main.ts         # load/build/flash Test1 only
+mbflash --project Test2 --hex-only      # build Test2's current code
+mbflash --project Test3 main.ts         # create Test3 if missing
+mbflash --project Test3 --switch        # create + focus an empty Test3
+mbflash --label Test1 --switch          # deprecated alias for --project
 ```
 
-`--set-label` stores `sessionStorage["mbflash.label"]`; that label is the
-primary identifier and is what `--label` matches. **The tab title is not used
-for matching.** Add `--retitle` if you also want the visible title changed to
-`MakeCode — <label>`.
+Project names are what MakeCode stores (`pxt.json` `"name"`, and the workspace
+header / `headers.name` in IndexedDB when persistent). In this session-only
+profile the header lives in renderer memory, so `mbflash` reads the editor’s
+project-name field. The tab title is cosmetic; add `--retitle` if you also want
+the visible title changed to `MakeCode — <project>`.
 
-If `--label` is missing, `mbflash` creates the project through the home page’s
-New Project dialog (same tab, then `#editor`) and labels it. `--no-create`
-turns a missing label into an error. Pass `--retitle` to also change the tab
-title. The project name and the downloaded hex use the label.
+If `--project` is missing, `mbflash` creates the project through the home page’s
+New Project dialog (same tab, then `#editor`) and the new project is named after
+`--project`. `--no-create` turns a missing project into an error.
 
-Labels survive reloads; `--list` always reads the stored label. The tab title
-is cosmetic and can be set explicitly with `--retitle`.
+Duplicate project names: select a specific tab with `--target <id>` or
+`--index <n>`.
 
 Practical notes for multiple projects:
 
@@ -123,16 +123,16 @@ mbflash --index 2 main.ts                  # second match
 mbflash --url makecode main.ts             # URL substring or /regex/
 mbflash --title "MakeCode" main.ts         # title substring
 mbflash --host makecode.microbit.org main.ts
-mbflash --label Test1 --switch             # focus a labelled tab
-mbflash --label Test1 --switch --retitle   # focus + set the visible title
-mbflash --label Test3 main.ts              # create Test3 if missing
-mbflash --target <id> --set-label Test1    # tag a tab (no title change)
+mbflash --label Test1 --switch             # deprecated alias for --project
+mbflash --project Test1 --switch           # focus a project tab
+mbflash --project Test1 --switch --retitle # focus + set the visible title
+mbflash --project Test3 main.ts            # create Test3 if missing
 mbflash --label NoSuch --switch --no-create # error instead of creating
 ```
 
 The default tab match is the exact hostname `makecode.microbit.org`. If more
-than one tab matches, the command fails and lists them; pick one with
-`--target`, `--label`, or `--index`.
+than one tab matches (or two tabs have the same project name), the command
+fails and lists them; pick one with `--target` or `--index`.
 
 ### Output / device
 
@@ -195,7 +195,7 @@ mbflash --cdp 127.0.0.1:9333 --target <id> main.ts
 
 - **Multiple tabs.** Tabs share an origin and can share persistent storage. On
   a session-only workspace each tab has its own in-memory project, and
-  `mbflash` can address them with `--label`/`--target`. With persistent
+  `mbflash` can address them with `--project`/`--target`. With persistent
   workspaces, avoid opening the same project in two tabs; edit one project per
   tab.
 - **Session-only projects.** Some profiles keep the project only in page

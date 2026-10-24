@@ -14,7 +14,7 @@ import path from "node:path";
 import os from "node:os";
 import { execFileSync } from "node:child_process";
 
-const VERSION = "1.1.0";
+const VERSION = "1.2.0";
 const DEFAULT_HOST = "makecode.microbit.org";
 const DEFAULT_CDP = "127.0.0.1:9222";
 
@@ -60,8 +60,8 @@ function defaults() {
     title: undefined,
     target: undefined,
     index: undefined,
-    label: undefined,
-    setLabel: undefined,
+    project: undefined,
+    label: undefined, // deprecated alias for --project
     switch: false,
     create: true,
     retitle: false,
@@ -161,11 +161,15 @@ function parseArgs(argv) {
       case "--target":
         o.target = value();
         break;
+      case "--project":
+        o.project = value();
+        break;
       case "--label":
+        // Deprecated alias; matching is by MakeCode project name.
         o.label = value();
         break;
       case "--set-label":
-        o.setLabel = value();
+        usage("--set-label is gone: tabs are identified by the MakeCode project name; use --project <name>");
         break;
       case "--switch":
         o.switch = true;
@@ -227,6 +231,10 @@ function parseArgs(argv) {
   }
 
   o.source = source;
+  if (o.project && o.label && o.project !== o.label) {
+    usage("--project and --label must name the same project");
+  }
+  o.project = o.project || o.label;
   o.timeoutMs = Math.round(o.timeoutSec * 1000);
   o.waitMs = Math.round(o.waitSec * 1000);
   return o;
@@ -237,7 +245,7 @@ function resolveMode(o) {
   if (explicit.length > 1) {
     usage("choose only one of --load-only, --hex-only, --flash-only, --flash-hex");
   }
-  if (o.retitle && !o.label && !o.setLabel) usage("--retitle needs --label or --set-label");
+  if (o.retitle && !o.project) usage("--retitle needs --project (or the --label alias)");
 
   if (o.switch) {
     if (o.source !== undefined || o.loadOnly || o.hexOnly || o.flashOnly || o.flashHex) {
@@ -249,7 +257,7 @@ function resolveMode(o) {
 
   if (o.flashHex) {
     if (o.source !== undefined) usage("--flash-hex does not take a source file");
-    if (o.label || o.setLabel || o.retitle) usage("--label/--set-label/--retitle require a browser tab");
+    if (o.project || o.retitle) usage("--project/--retitle require a browser tab");
     if (o.noBlocks || o.roundtrip) usage("--no-blocks/--roundtrip only apply when loading a source");
     return "flash-hex";
   }
@@ -275,7 +283,6 @@ function resolveMode(o) {
   }
 
   if (o.source) return "load+build+flash";
-  if (o.setLabel) return "label";
   usage(
     "provide a source file (e.g. mbflash main.ts) or a mode: " +
       "--load-only, --hex-only, --flash-only, --flash-hex",
@@ -301,14 +308,14 @@ Target selection:
   --host <hostname>      tab hostname match (default ${DEFAULT_HOST})
   --url <substr|/re/>    tab URL match
   --title <substr>       tab title match
-  --label <name>         select a tab by label (creates the project if missing)
-  --set-label <name>     tag the selected tab (sessionStorage only; no title)
-  --retitle              set the tab title to "MakeCode — <label>"
-  --no-create            with --label, fail instead of creating a project
+  --label <name>         deprecated alias for --project
+  --project <name>       select by MakeCode project name (creates if missing)
+  --retitle              set the tab title to "MakeCode — <project>"
+  --no-create            with --project, fail instead of creating a project
   --target <id>          exact CDP page target id (from --list)
   --index <n>            1-based choice among matches
   --no-focus             do not bring the selected tab to front
-  --list                 list page targets, ids and labels, then exit
+  --list                 list targets, ids and project names, then exit
 
 Output and device:
   --download-dir <dir>   where the browser writes the .hex
@@ -336,10 +343,10 @@ Examples:
   mbflash --flash-hex demo.hex
   mbflash --cdp 192.168.1.50:9222 --url makecode main.ts
   mbflash --list
-  mbflash --target <id> --set-label Test1
-  mbflash --label Test1 --switch --retitle
-  mbflash --label Test2 main.ts
-  mbflash --label Test3 main.ts       # creates Test3 if it does not exist
+  mbflash --project Test1 --switch --retitle
+  mbflash --project Test2 main.ts
+  mbflash --project Test3 main.ts     # creates Test3 if it does not exist
+  mbflash --label Test1 --switch      # deprecated alias for --project
 `);
 }
 
@@ -408,11 +415,28 @@ function metadataMatches(p, o, useHost) {
   return true;
 }
 
-async function pageLabel(page) {
+async function pageProjectName(page) {
   let c;
   try {
     c = await Cdp.connect(page.webSocketDebuggerUrl, 5000);
-    const v = await c.ev(`sessionStorage.getItem('mbflash.label') || ''`, 5000);
+    const v = await c.ev(
+      `(() => {
+        const el = document.querySelector('#fileNameInput2');
+        if (el && el.value && el.value.trim()) return el.value.trim();
+        // Fallback: an open pxt.json model (normally not loaded).
+        if (typeof monaco !== 'undefined' && monaco.editor) {
+          const m = monaco.editor.getModels().find(x => x.uri.toString().includes('pxt.json'));
+          if (m) {
+            try {
+              const n = JSON.parse(m.getValue()).name;
+              if (n) return String(n).trim();
+            } catch (e) {}
+          }
+        }
+        return '';
+      })()`,
+      5000,
+    );
     return v || null;
   } catch {
     return null;
@@ -421,9 +445,9 @@ async function pageLabel(page) {
   }
 }
 
-async function selectPage(pages, o, { allowMissingLabel = false } = {}) {
+async function selectPage(pages, o, { allowMissingProject = false } = {}) {
   if (!pages.length) {
-    if (allowMissingLabel && o.label) return null;
+    if (allowMissingProject && o.project) return null;
     throw new Error("no page targets at the CDP endpoint");
   }
 
@@ -436,14 +460,14 @@ async function selectPage(pages, o, { allowMissingLabel = false } = {}) {
   const useHost = o.host || (!o.url && !o.title ? DEFAULT_HOST : null);
   let matches = pages.filter((p) => metadataMatches(p, o, useHost));
 
-  if (o.label) {
-    const labels = await Promise.all(matches.map((p) => pageLabel(p)));
-    matches = matches.filter((p, i) => labels[i] === o.label);
+  if (o.project) {
+    const projects = await Promise.all(matches.map((p) => pageProjectName(p)));
+    matches = matches.filter((p, i) => projects[i] === o.project);
   }
 
   if (!matches.length) {
-    if (allowMissingLabel && o.label) return null;
-    throw new Error(o.label ? `no tab labelled "${o.label}"; use --list` : "no tab matched; use --list to see page targets");
+    if (allowMissingProject && o.project) return null;
+    throw new Error(o.project ? `no tab has project "${o.project}"; use --list` : "no tab matched; use --list to see page targets");
   }
 
   if (o.index) {
@@ -456,7 +480,7 @@ async function selectPage(pages, o, { allowMissingLabel = false } = {}) {
   if (matches.length === 1) return matches[0];
 
   const list = matches.map((p) => `  [${p.id}] ${p.url}`).join("\n");
-  throw new Error(`${matches.length} tabs matched; use --target <id>, --label <name>, or --index <n>:\n${list}`);
+  throw new Error(`${matches.length} tabs matched; use --target <id>, --project <name>, or --index <n>:\n${list}`);
 }
 
 function makecodeHomeUrl(target, pages, o) {
@@ -687,13 +711,13 @@ class Cdp {
 async function listTargets(o) {
   const target = parseCdpTarget(o.cdp);
   const pages = await fetchPages(target);
-  const labels = await Promise.all(pages.map((p) => pageLabel(p)));
+  const projects = await Promise.all(pages.map((p) => pageProjectName(p)));
 
   const useHost = o.host || (!o.url && !o.title ? DEFAULT_HOST : null);
   let matches = pages.filter((p) => metadataMatches(p, o, useHost));
   if (o.target) matches = matches.filter((p) => p.id === o.target);
-  if (o.label) {
-    matches = matches.filter((p) => labels[pages.indexOf(p)] === o.label);
+  if (o.project) {
+    matches = matches.filter((p) => projects[pages.indexOf(p)] === o.project);
   }
 
   if (ui.json) {
@@ -702,7 +726,7 @@ async function listTargets(o) {
         {
           ok: true,
           cdp: target.base,
-          pages: pages.map((p, i) => ({ ...p, mbflashLabel: labels[i] })),
+          pages: pages.map((p, i) => ({ ...p, projectName: projects[i] })),
           matches: matches.map((p) => p.id),
         },
         null,
@@ -716,12 +740,12 @@ async function listTargets(o) {
   if (!pages.length) out("  (none)");
   pages.forEach((p, i) => {
     const mark = matches.includes(p) ? "*" : " ";
-    const label = labels[i] ? ` (${labels[i]})` : "";
-    out(`${mark} ${i + 1}. [${p.id}]${label} ${p.url}`);
+    const project = projects[i] ? ` (${projects[i]})` : "";
+    out(`${mark} ${i + 1}. [${p.id}]${project} ${p.url}`);
     out(`      ${String(p.title || "").trim()}`);
   });
   if (matches.length > 1) {
-    out(`\n${matches.length} tabs match; use --target <id>, --label <name>, or --index <n>.`);
+    out(`\n${matches.length} tabs match; use --target <id>, --project <name>, or --index <n>.`);
   }
   return 0;
 }
@@ -1270,14 +1294,14 @@ async function main() {
     } else {
       const target = parseCdpTarget(o.cdp);
       const pages = await fetchPages(target);
-      let page = await selectPage(pages, o, { allowMissingLabel: !!o.label && o.create });
+      let page = await selectPage(pages, o, { allowMissingProject: !!o.project && o.create });
       let created = false;
       let createStart = 0;
 
       if (!page) {
         createStart = Date.now();
-        step(`No tab labelled "${o.label}"; creating a new project...`);
-        page = await createNewProjectTab(target, o.label, o, pages);
+        step(`No tab has project "${o.project}"; creating it...`);
+        page = await createNewProjectTab(target, o.project, o, pages);
         created = true;
         result.created = true;
       }
@@ -1294,48 +1318,26 @@ async function main() {
       if (o.focus) await cdp.send("Page.bringToFront").catch(() => {});
 
       if (created) {
-        await initNewProject(cdp, o.label);
+        await initNewProject(cdp, o.project);
         result.timings.create = Date.now() - createStart;
-        step(`Created ${o.label} (${fmt(result.timings.create)})`);
+        step(`Created ${o.project} (${fmt(result.timings.create)})`);
       } else {
         await waitForEditor(cdp);
       }
 
-      let tabLabel = o.label || null;
-      if (o.setLabel) {
-        tabLabel = o.setLabel;
-        await cdp.ev(`(() => {
-          sessionStorage.setItem('mbflash.label', ${JSON.stringify(o.setLabel)});
-          return sessionStorage.getItem('mbflash.label');
-        })()`);
-        if (mode !== "label") step(`Labelled ${page.id} as ${o.setLabel}`);
-      } else if (created && o.label) {
-        // A new project is addressed by the label that created it; store it so
-        // future --label calls find the tab without relying on its title.
-        const stored = await cdp.ev(`(() => {
-          sessionStorage.setItem('mbflash.label', ${JSON.stringify(o.label)});
-          return sessionStorage.getItem('mbflash.label');
-        })()`);
-        if (stored !== o.label) warn(`could not store the label "${o.label}" on the new tab`);
-      }
       if (o.retitle) {
-        const label = o.setLabel || o.label;
-        await cdp.ev(`document.title = 'MakeCode — ' + ${JSON.stringify(label)}`).catch(() => {});
+        await cdp.ev(`document.title = 'MakeCode — ' + ${JSON.stringify(o.project)}`).catch(() => {});
       }
 
       const currentUrl = await cdp.ev(`location.href`).catch(() => page.url);
-      result.tab = { id: page.id, label: tabLabel, url: currentUrl };
       const projectName = await cdp
         .ev(`document.querySelector('#fileNameInput2')?.value || ''`)
         .catch(() => "");
-      if (projectName) result.tab.projectName = projectName;
+      const tabProject = projectName || o.project || null;
+      result.tab = { id: page.id, project: tabProject, url: currentUrl };
 
-      if (mode === "label" || mode === "switch") {
-        out(
-          mode === "switch"
-            ? `switched to ${tabLabel || page.id} (${page.id})`
-            : `labelled ${page.id} as ${o.setLabel}`,
-        );
+      if (mode === "switch") {
+        out(`switched to ${tabProject || page.id} (${page.id})`);
         result.timings.total = Date.now() - t0;
         if (ui.json) console.log(JSON.stringify(result, null, 2));
         return 0;
@@ -1399,9 +1401,8 @@ async function main() {
       }
     }
 
-    if (o.retitle && (o.setLabel || o.label) && cdp) {
-      const label = o.setLabel || o.label;
-      await cdp.ev(`document.title = 'MakeCode — ' + ${JSON.stringify(label)}`).catch(() => {});
+    if (o.retitle && o.project && cdp) {
+      await cdp.ev(`document.title = 'MakeCode — ' + ${JSON.stringify(o.project)}`).catch(() => {});
     }
 
     result.timings.total = Date.now() - t0;
