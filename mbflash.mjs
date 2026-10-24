@@ -20,7 +20,9 @@ if (nodeMajor < 22 || (nodeMajor === 22 && nodeMinor < 4) || typeof globalThis.W
   process.exit(1);
 }
 
-const VERSION = "1.2.0";
+const VERSION = JSON.parse(
+  fs.readFileSync(new URL("./package.json", import.meta.url), "utf8"),
+).version;
 const DEFAULT_HOST = "makecode.microbit.org";
 const DEFAULT_CDP = "127.0.0.1:9222";
 
