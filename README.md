@@ -27,7 +27,8 @@ That one command:
            "https://makecode.microbit.org/#editor"
   ```
 
-- One MakeCode tab (the tool refuses ambiguous tabs unless you select one).
+- One or more MakeCode tabs. Select the intended one with `--label`,
+  `--target`, or `--index`; ambiguous matches are refused.
 - The micro:bit mounted as `MICROBIT` (normally `/run/media/$USER/MICROBIT`).
 
 ## Install
@@ -52,9 +53,45 @@ on `PATH`, add it or invoke `./mbflash.mjs` directly.
 | `mbflash --hex-only` | build/download the code already in the editor |
 | `mbflash --flash-only` | build/flash the code already in the editor |
 | `mbflash --flash-hex demo.hex` | flash an existing `.hex` (no CDP) |
+| `mbflash --label Test1 --switch` | focus the Test1 tab (no build) |
 
 `--hex-only` with no file is useful when a human has edited Blocks and you just
-want a `.hex`. `--flash-only` skips loading but still builds.
+want a `.hex`. `--flash-only` skips loading but still builds. `--switch` is the
+tab manager: select by label/target and bring it to the front.
+
+## Multiple tabs / projects
+
+All MakeCode tabs have the same URL and title. `mbflash` identifies them by
+**CDP target id** and by an optional **per-tab label** stored in
+`sessionStorage` (not shared between tabs).
+
+```sh
+mbflash --list                          # ids, labels, URLs
+mbflash --target <id> --set-label Test1 # tag a tab; also retitles it
+mbflash --label Test1 --switch          # focus Test1, no build
+mbflash --label Test1 main.ts           # load/build/flash Test1 only
+mbflash --label Test2 --hex-only        # build Test2's current code
+```
+
+`--set-label` sets `sessionStorage["mbflash.label"]` and changes the tab title
+to `MakeCode — <label>`, so the browser tab strip shows which project is which.
+Labels survive reloads, though MakeCode may reset the title; `--list` always
+reads the stored label.
+
+Practical notes for multiple projects:
+
+- Work one at a time. `mbflash` brings the selected tab to the front by default
+  (hidden tabs are throttled by Chromium); `--no-focus` skips that.
+- A shared `--download-dir` is fine: MakeCode names the `.hex` after the project
+  (`microbit-Test1.hex`, `microbit-Test2.hex`), so sequential builds keep
+  distinct files.
+- On this profile the MakeCode workspace is **session-only**: each tab's project
+  lives in renderer memory and is lost on reload. Keep `main.ts` on disk.
+- The tabs share origin storage (`localStorage`), but their in-memory projects
+  are independent. If you sign in or enable persistent workspaces, keep to one
+  tab per project and verify that the IDB workspace is not being shared.
+- Only one board mount is used by default. For multiple boards, pass a different
+  `--device` per project.
 
 ## Options
 
@@ -69,11 +106,13 @@ mbflash --index 2 main.ts                  # second match
 mbflash --url makecode main.ts             # URL substring or /regex/
 mbflash --title "MakeCode" main.ts         # title substring
 mbflash --host makecode.microbit.org main.ts
+mbflash --label Test1 --switch             # focus a labelled tab
+mbflash --target <id> --set-label Test1    # tag a tab
 ```
 
 The default tab match is the exact hostname `makecode.microbit.org`. If more
 than one tab matches, the command fails and lists them; pick one with
-`--target` or `--index` (the same rule as the skill: one MakeCode tab only).
+`--target`, `--label`, or `--index`.
 
 ### Output / device
 
@@ -134,8 +173,11 @@ mbflash --cdp 127.0.0.1:9333 --target <id> main.ts
 
 ## Notes
 
-- **One tab.** MakeCode shares one IndexedDB project per origin. Two tabs
-  overwrite each other; the CLI refuses multiple matches by default.
+- **Multiple tabs.** Tabs share an origin and can share persistent storage. On
+  a session-only workspace each tab has its own in-memory project, and
+  `mbflash` can address them with `--label`/`--target`. With persistent
+  workspaces, avoid opening the same project in two tabs; edit one project per
+  tab.
 - **Session-only projects.** Some profiles keep the project only in page
   memory. The CLI still works, but the project is lost on reload; keep the
   `main.ts` and `.hex` on disk.

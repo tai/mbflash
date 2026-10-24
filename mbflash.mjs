@@ -60,6 +60,10 @@ function defaults() {
     title: undefined,
     target: undefined,
     index: undefined,
+    label: undefined,
+    setLabel: undefined,
+    switch: false,
+    focus: true,
     source: undefined,
     loadOnly: false,
     hexOnly: false,
@@ -155,6 +159,18 @@ function parseArgs(argv) {
       case "--target":
         o.target = value();
         break;
+      case "--label":
+        o.label = value();
+        break;
+      case "--set-label":
+        o.setLabel = value();
+        break;
+      case "--switch":
+        o.switch = true;
+        break;
+      case "--no-focus":
+        o.focus = false;
+        break;
       case "--index": {
         const n = Number(value());
         if (!Number.isInteger(n) || n < 1) usage("--index must be a positive integer");
@@ -214,8 +230,17 @@ function resolveMode(o) {
     usage("choose only one of --load-only, --hex-only, --flash-only, --flash-hex");
   }
 
+  if (o.switch) {
+    if (o.source !== undefined || o.loadOnly || o.hexOnly || o.flashOnly || o.flashHex) {
+      usage("--switch only selects/focuses a tab; do not combine it with a source or build/flash mode");
+    }
+    if (o.noBlocks || o.roundtrip) usage("--no-blocks/--roundtrip only apply when loading a source");
+    return "switch";
+  }
+
   if (o.flashHex) {
     if (o.source !== undefined) usage("--flash-hex does not take a source file");
+    if (o.label || o.setLabel) usage("--label/--set-label require a browser tab");
     if (o.noBlocks || o.roundtrip) usage("--no-blocks/--roundtrip only apply when loading a source");
     return "flash-hex";
   }
@@ -241,6 +266,7 @@ function resolveMode(o) {
   }
 
   if (o.source) return "load+build+flash";
+  if (o.setLabel) return "label";
   usage(
     "provide a source file (e.g. mbflash main.ts) or a mode: " +
       "--load-only, --hex-only, --flash-only, --flash-hex",
@@ -259,15 +285,19 @@ Modes:
   --hex-only [file]      load [file] -> build/download (no flash)
   --flash-only           build/flash the code already in the editor
   --flash-hex <file>     flash an existing .hex (no CDP)
+  --switch               focus the selected tab and exit (no build)
 
 Target selection:
   --cdp <[ip:]port>      CDP endpoint (default 127.0.0.1:9222)
   --host <hostname>      tab hostname match (default ${DEFAULT_HOST})
   --url <substr|/re/>    tab URL match
   --title <substr>       tab title match
+  --label <name>         select a tab by its per-tab mbflash label
+  --set-label <name>     tag the selected tab and retitle it
   --target <id>          exact CDP page target id (from --list)
   --index <n>            1-based choice among matches
-  --list                 list page targets and exit
+  --no-focus             do not bring the selected tab to front
+  --list                 list page targets, ids and labels, then exit
 
 Output and device:
   --download-dir <dir>   where the browser writes the .hex
@@ -295,6 +325,9 @@ Examples:
   mbflash --flash-hex demo.hex
   mbflash --cdp 192.168.1.50:9222 --url makecode main.ts
   mbflash --list
+  mbflash --target <id> --set-label Test1
+  mbflash --label Test1 --switch
+  mbflash --label Test2 main.ts
 `);
 }
 
@@ -348,7 +381,35 @@ function matchPattern(pattern, text) {
   return text.toLowerCase().includes(pattern.toLowerCase());
 }
 
-function selectPage(pages, o) {
+function metadataMatches(p, o, useHost) {
+  if (useHost) {
+    try {
+      if (new URL(p.url).hostname !== useHost) return false;
+    } catch {
+      return false;
+    }
+  }
+  if (o.url && !matchPattern(o.url, p.url)) return false;
+  if (o.title && !String(p.title || "").toLowerCase().includes(o.title.toLowerCase())) {
+    return false;
+  }
+  return true;
+}
+
+async function pageLabel(page) {
+  let c;
+  try {
+    c = await Cdp.connect(page.webSocketDebuggerUrl, 5000);
+    const v = await c.ev(`sessionStorage.getItem('mbflash.label') || ''`, 5000);
+    return v || null;
+  } catch {
+    return null;
+  } finally {
+    c?.close();
+  }
+}
+
+async function selectPage(pages, o) {
   if (!pages.length) throw new Error("no page targets at the CDP endpoint");
 
   if (o.target) {
@@ -358,20 +419,16 @@ function selectPage(pages, o) {
   }
 
   const useHost = o.host || (!o.url && !o.title ? DEFAULT_HOST : null);
-  const matches = pages.filter((p) => {
-    if (useHost) {
-      try {
-        if (new URL(p.url).hostname !== useHost) return false;
-      } catch {
-        return false;
-      }
-    }
-    if (o.url && !matchPattern(o.url, p.url)) return false;
-    if (o.title && !String(p.title || "").toLowerCase().includes(o.title.toLowerCase())) {
-      return false;
-    }
-    return true;
-  });
+  let matches = pages.filter((p) => metadataMatches(p, o, useHost));
+
+  if (o.label) {
+    const labels = await Promise.all(matches.map((p) => pageLabel(p)));
+    matches = matches.filter((p, i) => labels[i] === o.label);
+  }
+
+  if (!matches.length) {
+    throw new Error(o.label ? `no tab labelled "${o.label}"; use --list` : "no tab matched; use --list to see page targets");
+  }
 
   if (o.index) {
     if (o.index > matches.length) {
@@ -381,10 +438,9 @@ function selectPage(pages, o) {
   }
 
   if (matches.length === 1) return matches[0];
-  if (!matches.length) throw new Error("no tab matched; use --list to see page targets");
 
   const list = matches.map((p) => `  [${p.id}] ${p.url}`).join("\n");
-  throw new Error(`${matches.length} tabs matched; use --target <id> or --index <n>:\n${list}`);
+  throw new Error(`${matches.length} tabs matched; use --target <id>, --label <name>, or --index <n>:\n${list}`);
 }
 
 function normalizeWsUrl(page, target) {
@@ -489,29 +545,28 @@ class Cdp {
 async function listTargets(o) {
   const target = parseCdpTarget(o.cdp);
   const pages = await fetchPages(target);
-  let matches = [];
-  try {
-    // selectPage throws on ambiguity; for --list, compute matches without throwing.
-    const useHost = o.host || (!o.url && !o.title ? DEFAULT_HOST : null);
-    matches = pages.filter((p) => {
-      if (o.target && p.id !== o.target) return false;
-      if (useHost) {
-        try {
-          if (new URL(p.url).hostname !== useHost) return false;
-        } catch {
-          return false;
-        }
-      }
-      if (o.url && !matchPattern(o.url, p.url)) return false;
-      if (o.title && !String(p.title || "").toLowerCase().includes(o.title.toLowerCase())) return false;
-      return true;
-    });
-  } catch {
-    matches = [];
+  const labels = await Promise.all(pages.map((p) => pageLabel(p)));
+
+  const useHost = o.host || (!o.url && !o.title ? DEFAULT_HOST : null);
+  let matches = pages.filter((p) => metadataMatches(p, o, useHost));
+  if (o.target) matches = matches.filter((p) => p.id === o.target);
+  if (o.label) {
+    matches = matches.filter((p) => labels[pages.indexOf(p)] === o.label);
   }
 
   if (ui.json) {
-    console.log(JSON.stringify({ ok: true, cdp: target.base, pages, matches: matches.map((p) => p.id) }, null, 2));
+    console.log(
+      JSON.stringify(
+        {
+          ok: true,
+          cdp: target.base,
+          pages: pages.map((p, i) => ({ ...p, mbflashLabel: labels[i] })),
+          matches: matches.map((p) => p.id),
+        },
+        null,
+        2,
+      ),
+    );
     return 0;
   }
 
@@ -519,11 +574,12 @@ async function listTargets(o) {
   if (!pages.length) out("  (none)");
   pages.forEach((p, i) => {
     const mark = matches.includes(p) ? "*" : " ";
-    out(`${mark} ${i + 1}. [${p.id}] ${p.url}`);
+    const label = labels[i] ? ` (${labels[i]})` : "";
+    out(`${mark} ${i + 1}. [${p.id}]${label} ${p.url}`);
     out(`      ${String(p.title || "").trim()}`);
   });
   if (matches.length > 1) {
-    out(`\n${matches.length} tabs match; use --target <id> or --index <n>.`);
+    out(`\n${matches.length} tabs match; use --target <id>, --label <name>, or --index <n>.`);
   }
   return 0;
 }
@@ -1072,7 +1128,7 @@ async function main() {
     } else {
       const target = parseCdpTarget(o.cdp);
       const pages = await fetchPages(target);
-      const page = selectPage(pages, o);
+      const page = await selectPage(pages, o);
       const wsUrl = normalizeWsUrl(page, target);
 
       debug(`CDP ${target.base}, browser ${await fetch(`${target.base}/json/version`)
@@ -1082,7 +1138,37 @@ async function main() {
       debug(`tab ${page.id} ${page.url}`);
 
       cdp = await Cdp.connect(wsUrl);
-      await cdp.send("Page.bringToFront").catch(() => {});
+      if (o.focus) await cdp.send("Page.bringToFront").catch(() => {});
+
+      let tabLabel = o.label || null;
+      if (o.setLabel) {
+        tabLabel = o.setLabel;
+        await cdp.ev(`(() => {
+          sessionStorage.setItem('mbflash.label', ${JSON.stringify(o.setLabel)});
+          document.title = 'MakeCode — ' + ${JSON.stringify(o.setLabel)};
+          return sessionStorage.getItem('mbflash.label');
+        })()`);
+        if (mode !== "label") step(`Labelled ${page.id} as ${o.setLabel}`);
+      } else if (o.label) {
+        // Restore the visible title when selecting by label; the app may have
+        // reset document.title on reload or project load.
+        await cdp
+          .ev(`document.title = 'MakeCode — ' + ${JSON.stringify(o.label)}`)
+          .catch(() => {});
+      }
+      result.tab = { id: page.id, label: tabLabel, url: page.url };
+
+      if (mode === "label" || mode === "switch") {
+        out(
+          mode === "switch"
+            ? `switched to ${tabLabel || page.id} (${page.id})`
+            : `labelled ${page.id} as ${o.setLabel}`,
+        );
+        result.timings.total = Date.now() - t0;
+        if (ui.json) console.log(JSON.stringify(result, null, 2));
+        return 0;
+      }
+
       await waitForEditor(cdp);
 
       let blocks = null;
@@ -1141,6 +1227,11 @@ async function main() {
           step(`Flashed ${device} (${fmt(result.timings.flash)}, remounted ${f.seenUnmounted ? "after unmount" : "without observed unmount"})`);
         }
       }
+    }
+
+    if ((o.setLabel || o.label) && cdp) {
+      const label = o.setLabel || o.label;
+      await cdp.ev(`document.title = 'MakeCode — ' + ${JSON.stringify(label)}`).catch(() => {});
     }
 
     result.timings.total = Date.now() - t0;
