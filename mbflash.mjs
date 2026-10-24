@@ -14,6 +14,12 @@ import path from "node:path";
 import os from "node:os";
 import { execFileSync } from "node:child_process";
 
+const [nodeMajor, nodeMinor] = process.versions.node.split(".").map(Number);
+if (nodeMajor < 22 || (nodeMajor === 22 && nodeMinor < 4) || typeof globalThis.WebSocket !== "function") {
+  console.error("mbflash requires Node.js 22.4+ (built-in WebSocket).");
+  process.exit(1);
+}
+
 const VERSION = "1.2.0";
 const DEFAULT_HOST = "makecode.microbit.org";
 const DEFAULT_CDP = "127.0.0.1:9222";

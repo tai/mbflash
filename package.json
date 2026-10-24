@@ -1,14 +1,44 @@
 {
   "name": "mbflash",
   "version": "1.2.0",
-  "description": "Load, build and flash micro:bit MakeCode projects over CDP",
+  "description": "Load, build, and flash micro:bit MakeCode projects over CDP",
   "type": "module",
   "bin": {
     "mbflash": "./mbflash.mjs"
   },
-  "engines": {
-    "node": ">=22"
+  "files": [
+    "mbflash.mjs",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "start": "node mbflash.mjs",
+    "test": "node --test",
+    "lint": "node --check mbflash.mjs",
+    "prepack": "npm test"
   },
-  "private": true,
+  "engines": {
+    "node": ">=22.4"
+  },
+  "keywords": [
+    "micro:bit",
+    "makecode",
+    "microbit",
+    "cdp",
+    "chrome-devtools-protocol",
+    "flash",
+    "hex",
+    "cli",
+    "education"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/OWNER/mbflash.git"
+  },
+  "homepage": "https://github.com/OWNER/mbflash#readme",
+  "bugs": {
+    "url": "https://github.com/OWNER/mbflash/issues"
+  },
+  "author": "Taisuke Yamada",
   "license": "MIT"
 }

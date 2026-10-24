@@ -17,7 +17,7 @@ That one command:
 
 ## Requirements
 
-- Node.js **22+** (uses the built-in `WebSocket` and `fetch`).
+- Node.js **22.4+** (uses the built-in `WebSocket` and `fetch`).
 - A headed Chromium/Chrome launched with a debugging port:
 
   ```sh
@@ -33,15 +33,28 @@ That one command:
 
 ## Install
 
-From this directory:
+From npm (after publishing):
 
 ```sh
-chmod +x mbflash.mjs
-ln -sf "$PWD/mbflash.mjs" "$HOME/.local/bin/mbflash"
+npm install -g mbflash
 ```
 
-`npm link` also works (`npm link` in this directory). If `~/.local/bin` is not
-on `PATH`, add it or invoke `./mbflash.mjs` directly.
+From this GitHub repository (replace `OWNER`):
+
+```sh
+npm install -g github:OWNER/mbflash
+# or: npm install -g git+https://github.com/OWNER/mbflash.git
+```
+
+For development from a checkout:
+
+```sh
+npm link            # puts `mbflash` on PATH, pointing at ./mbflash.mjs
+# or run directly:
+node mbflash.mjs --help
+```
+
+The package has no runtime dependencies and requires Node.js **22.4+**.
 
 ## Modes
 
@@ -217,3 +230,49 @@ mbflash --cdp 127.0.0.1:9333 --target <id> main.ts
   to give it the name you want.
 - **Not a simulator driver.** Like the skill, this tool does not verify
   behaviour in the simulator; the human watches the board.
+
+## Development
+
+```sh
+npm test            # CLI tests; no browser or board required
+npm run lint        # node --check
+npm pack --dry-run  # inspect the npm package contents
+```
+
+The test suite covers argument parsing, project/title semantics, and hex
+validation. Browser/CDP loading and flashing require a real MakeCode tab and a
+mounted micro:bit.
+
+## Publishing
+
+1. Replace `OWNER` in `package.json` with your GitHub account:
+
+   ```sh
+   npm pkg set repository.url="git+https://github.com/OWNER/mbflash.git"
+   npm pkg set homepage="https://github.com/OWNER/mbflash#readme"
+   npm pkg set bugs.url="https://github.com/OWNER/mbflash/issues"
+   ```
+
+2. Create and push the GitHub repository:
+
+   ```sh
+   gh repo create OWNER/mbflash --public --source=. --remote=origin --push
+   ```
+
+3. Publish to npm:
+
+   ```sh
+   npm publish
+   ```
+
+4. Tag the release:
+
+   ```sh
+   git tag v1.2.0
+   git push origin v1.2.0
+   ```
+
+The `Publish npm` workflow runs on a published GitHub release (or manually) and
+expects an `NPM_TOKEN` repository secret. Keep the repository public for npm
+provenance. `npm pack --dry-run` shows exactly what would be published:
+`mbflash.mjs`, `README.md`, `LICENSE`, and `package.json`.
