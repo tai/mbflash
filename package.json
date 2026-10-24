@@ -33,11 +33,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/OWNER/mbflash.git"
+    "url": "git+https://github.com/tai/mbflash.git"
   },
-  "homepage": "https://github.com/OWNER/mbflash#readme",
+  "homepage": "https://github.com/tai/mbflash#readme",
   "bugs": {
-    "url": "https://github.com/OWNER/mbflash/issues"
+    "url": "https://github.com/tai/mbflash/issues"
   },
   "author": "Taisuke Yamada",
   "license": "MIT"

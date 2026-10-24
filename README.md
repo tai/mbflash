@@ -1,5 +1,7 @@
 # mbflash
 
+[![CI](https://github.com/tai/mbflash/actions/workflows/ci.yml/badge.svg)](https://github.com/tai/mbflash/actions/workflows/ci.yml)
+
 A dependency-free CLI for driving the micro:bit MakeCode editor over CDP:
 load TypeScript, commit it to Blocks, compile/download the `.hex`, and flash it
 by writing to the `MICROBIT` volume (no WebUSB pairing needed).
@@ -39,11 +41,11 @@ From npm (after publishing):
 npm install -g mbflash
 ```
 
-From this GitHub repository (replace `OWNER`):
+From this GitHub repository:
 
 ```sh
-npm install -g github:OWNER/mbflash
-# or: npm install -g git+https://github.com/OWNER/mbflash.git
+npm install -g github:tai/mbflash
+# or: npm install -g git+https://github.com/tai/mbflash.git
 ```
 
 For development from a checkout:
@@ -245,32 +247,14 @@ mounted micro:bit.
 
 ## Publishing
 
-1. Replace `OWNER` in `package.json` with your GitHub account:
+This repository is <https://github.com/tai/mbflash>.
 
-   ```sh
-   npm pkg set repository.url="git+https://github.com/OWNER/mbflash.git"
-   npm pkg set homepage="https://github.com/OWNER/mbflash#readme"
-   npm pkg set bugs.url="https://github.com/OWNER/mbflash/issues"
-   ```
-
-2. Create and push the GitHub repository:
-
-   ```sh
-   gh repo create OWNER/mbflash --public --source=. --remote=origin --push
-   ```
-
-3. Publish to npm:
-
-   ```sh
-   npm publish
-   ```
-
-4. Tag the release:
-
-   ```sh
-   git tag v1.2.0
-   git push origin v1.2.0
-   ```
+```sh
+npm test
+npm publish
+git tag v1.2.0      # use the new version
+git push origin main --tags
+```
 
 The `Publish npm` workflow runs on a published GitHub release (or manually) and
 expects an `NPM_TOKEN` repository secret. Keep the repository public for npm
