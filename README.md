@@ -3,9 +3,17 @@
 [![CI](https://github.com/tai/mbflash/actions/workflows/ci.yml/badge.svg)](https://github.com/tai/mbflash/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/mbflash.svg)](https://www.npmjs.com/package/mbflash)
 
-A dependency-free CLI for driving the micro:bit MakeCode editor over CDP:
-load TypeScript, commit it to Blocks, compile/download the `.hex`, and flash it
-by writing to the `MICROBIT` volume (no WebUSB pairing needed).
+![The Test5 project in the micro:bit MakeCode editor: blocks on the canvas and the micro:bit simulator, as seen by an agent-driven mbflash session](https://raw.githubusercontent.com/tai/mbflash/main/docs/makecode-test5.png)
+
+mbflash is a bridge between an AI coding agent and the micro:bit MakeCode
+editor. It connects an agentic coding workflow — where a model writes files on
+disk and runs commands — to the traditional text and block experience people
+actually use in MakeCode: an agent writes ordinary TypeScript, mbflash pushes it
+into a live editor tab, and the program reappears as Blocks.
+
+From there mbflash can compile and download the `.hex` and flash it by writing
+to the `MICROBIT` volume, so there is no WebUSB pairing step. The CLI itself is
+dependency-free and talks to the browser over CDP.
 
 ```sh
 mbflash main.ts
