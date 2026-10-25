@@ -261,7 +261,7 @@ This repository is <https://github.com/tai/mbflash>.
 ```sh
 npm test
 npm publish
-git tag v1.2.2      # use the new version
+git tag v1.2.3      # use the new version
 git push origin main --tags
 ```
 
