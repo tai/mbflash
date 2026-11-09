@@ -13,8 +13,9 @@ into a live editor tab, and the program reappears as Blocks.
 
 From there mbflash can compile and download the `.hex` and flash it by writing
 to the `MICROBIT` volume, so there is no WebUSB pairing step. It can also
-search, list and install MakeCode extensions through the editor before loading
-code. The CLI itself is dependency-free and talks to the browser over CDP.
+search, list, install and remove MakeCode extensions, and snapshot the current
+project files back to disk. The CLI itself is dependency-free and talks to the
+browser over CDP.
 
 ```sh
 mbflash main.ts
@@ -83,6 +84,7 @@ The package has no runtime dependencies and requires Node.js **22.4+**.
 | `mbflash --search-extensions servo` | search the live extension gallery |
 | `mbflash --extension servo main.ts` | ensure installed → load → build → flash |
 | `mbflash --remove-extension servo` | remove an extension from the project |
+| `mbflash --snapshot ./backup` | save `main.ts`, `main.blocks`, `pxt.json` |
 
 `--hex-only` with no file is useful when a human has edited Blocks and you just
 want a `.hex`. `--flash-only` skips loading but still builds. `--switch` is the
@@ -183,6 +185,30 @@ mbflash --project Demo --remove-extension servo --remove-extension neopixel main
 - Installing an extension does not make it safe for the board. V2-only
   extensions (for example `datalogger`) install cleanly on a V1 project and can
   still panic at runtime.
+
+## Snapshot / reading the project
+
+`mbflash --snapshot [dir]` saves the current project files. The directory
+defaults to `.`:
+
+```sh
+mbflash --snapshot ./backup
+mbflash --project MyProject --snapshot ./backup --json
+mbflash --project MyProject --snapshot ./backup --from-editor
+```
+
+- In a persisted workspace, mbflash reads `main.ts`, `main.blocks`, and
+  `pxt.json` from the workspace. In a session-only workspace it falls back to
+  the live editor for `main.ts` and `pxt.json`.
+- `--from-editor` forces the live editor path. Use it when Blocks were changed
+  after the last persisted save.
+- `main.blocks` can only be saved when the workspace persists. In a session-only
+  profile the blocks exist only in page memory, so keep the tab open.
+- The Blocks/JavaScript view is restored after reading.
+- `--json` reports `editor`, `name`, `modified`, `files`, `historyCount`,
+  `sessionOnly`, `tsLen`, `blocksLen`, `markers`, `readFromEditor`, and `saved`.
+- TypeScript markers are reported as warnings; the files are still written.
+- `--snapshot` only reads and exits; it does not build or flash.
 
 ## Options
 
@@ -316,9 +342,10 @@ npm run lint        # node --check
 npm pack --dry-run  # inspect the npm package contents
 ```
 
-The test suite covers argument parsing (including extension flags), project/title
-semantics, and hex validation. Browser/CDP loading, extension installation and
-flashing require a real MakeCode tab and a mounted micro:bit.
+The test suite covers argument parsing (including extension and snapshot
+flags), project/title semantics, and hex validation. Browser/CDP loading,
+extension installation and flashing require a real MakeCode tab and a mounted
+micro:bit.
 
 ## Publishing
 

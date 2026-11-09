@@ -85,6 +85,9 @@ function defaults() {
     removeExtensions: [],
     listExtensions: false,
     searchExtensions: undefined,
+    snapshot: false,
+    snapshotDir: ".",
+    fromEditor: false,
     skill: false,
     downloadDir: process.env.MBFLASH_DOWNLOAD_DIR || path.join(cache, "mbflash", "hex"),
     hexOut: undefined,
@@ -235,6 +238,19 @@ function parseArgs(argv) {
       case "--search-extensions":
         o.searchExtensions = value();
         break;
+      case "--snapshot":
+        if (inline !== undefined) {
+          o.snapshotDir = inline || ".";
+        } else if (i + 1 < argv.length && !argv[i + 1].startsWith("-")) {
+          o.snapshotDir = argv[++i];
+        } else {
+          o.snapshotDir = ".";
+        }
+        o.snapshot = true;
+        break;
+      case "--from-editor":
+        o.fromEditor = true;
+        break;
       case "--skill":
         o.skill = true;
         break;
@@ -281,6 +297,29 @@ function resolveMode(o) {
     usage("choose only one of --load-only, --hex-only, --flash-only, --flash-hex");
   }
   if (o.retitle && !o.project) usage("--retitle needs --project (or the --label alias)");
+  if (o.fromEditor && !o.snapshot) usage("--from-editor only applies to --snapshot");
+
+  if (o.snapshot) {
+    if (
+      o.source !== undefined ||
+      o.loadOnly ||
+      o.hexOnly ||
+      o.flashOnly ||
+      o.flashHex ||
+      o.switch
+    ) {
+      usage("--snapshot only reads the project; do not combine it with a source or build/flash modes");
+    }
+    if (o.extensions.length || o.removeExtensions.length) {
+      usage("--snapshot does not install or remove extensions");
+    }
+    if (o.listExtensions || o.searchExtensions !== undefined) {
+      usage("--snapshot is its own read mode; do not combine it with --list-extensions/--search-extensions");
+    }
+    if (o.retitle) usage("--snapshot does not retitle the tab");
+    if (o.noBlocks || o.roundtrip) usage("--no-blocks/--roundtrip only apply when loading a source");
+    return "snapshot";
+  }
 
   if (o.listExtensions && o.searchExtensions !== undefined) {
     usage("choose only one of --list-extensions and --search-extensions");
@@ -389,6 +428,7 @@ Modes:
   --switch               focus the selected tab and exit (no build)
   --extension <spec>     ensure extension(s) are installed, then continue
   --remove-extension <spec> remove extension(s), then continue
+  --snapshot [dir]       save main.ts / main.blocks / pxt.json (default .)
   --list-extensions      list the project's dependencies and exit
   --search-extensions <q> search the live extension gallery and exit
 
@@ -423,6 +463,10 @@ Extensions:
   --list-extensions      list installed dependencies (defaults vs extensions)
   --search-extensions <q> search the gallery (bundled + approved packages)
 
+Snapshot:
+  --snapshot [dir]       save main.ts, main.blocks (if persisted) and pxt.json
+  --from-editor          with --snapshot, read main.ts from the live editor
+
 Other:
   -j, --json             machine-readable summary on stdout
   -q, --quiet            suppress progress
@@ -448,6 +492,8 @@ Examples:
   mbflash --project ServoDemo --extension servo main.ts
   mbflash --project Demo --extension servo --extension neopixel main.ts
   mbflash --project ServoDemo --remove-extension servo --switch
+  mbflash --project MyProject --snapshot ./backup
+  mbflash --project MyProject --snapshot ./backup --from-editor
   mbflash --skill > SKILL.md
 `);
 }
@@ -1848,6 +1894,176 @@ function printRemovedExtensions(info) {
 }
 
 // ---------------------------------------------------------------------------
+// snapshot
+// ---------------------------------------------------------------------------
+
+async function readWorkspaceState(cdp) {
+  const state = await cdp.ev(`(async () => {
+    const dbNames = (await indexedDB.databases()).map(d => d.name || "");
+    const dbName = dbNames.find(n => n.startsWith("__pxt_idb_workspace_microbit"));
+    if (!dbName) return { hasWorkspace: false, files: [], historyCount: 0 };
+
+    const open = n => new Promise((ok, no) => {
+      const r = indexedDB.open(n);
+      r.onsuccess = () => ok(r.result);
+      r.onerror = () => no(r.error);
+    });
+    const all = s => new Promise((ok, no) => {
+      const tx = db.transaction(s, "readonly");
+      const r = tx.objectStore(s).getAll();
+      r.onsuccess = () => ok(r.result);
+      r.onerror = () => no(r.error);
+    });
+
+    const db = await open(dbName);
+    const headers = await all("headers").catch(() => []);
+    const texts = await all("texts").catch(() => []);
+    const header = headers[0] || null;
+    const text = texts[0] || null;
+    const files = text && text.files ? text.files : {};
+    let historyCount = 0;
+    try {
+      if (files["_history"]) historyCount = (JSON.parse(files["_history"]).entries || []).length;
+    } catch (e) {}
+    return {
+      hasWorkspace: true,
+      editor: header && header.editor,
+      name: header && header.name,
+      modified: header && header.modificationTime,
+      files: Object.keys(files),
+      ts: files["main.ts"],
+      blocks: files["main.blocks"],
+      pxt: files["pxt.json"],
+      historyCount,
+    };
+  })()`).catch(() => null);
+
+  if (!state) return { hasWorkspace: false, files: [], historyCount: 0, sessionOnly: true };
+  state.sessionOnly = !state.ts && !state.blocks;
+  return state;
+}
+
+async function readEditorSource(cdp) {
+  const wasCodeView = await cdp
+    .ev(`(() => {
+      const js = document.querySelector('[aria-label="Convert code to Blocks"]');
+      return !!document.querySelector('.monaco-editor')?.getBoundingClientRect().width && !!js;
+    })()`)
+    .catch(() => false);
+
+  const switched = await ensureCodeView(cdp);
+  const r = await cdp.ev(`(() => {
+    const m = typeof monaco !== 'undefined' && monaco.editor
+      ? monaco.editor.getModels().find(x => x.uri.toString().includes('main.ts'))
+      : null;
+    return {
+      ts: m ? m.getValue() : null,
+      markers: typeof monaco !== 'undefined' && monaco.editor
+        ? monaco.editor.getModelMarkers({}).map(x => x.message)
+        : [],
+    };
+  })()`);
+
+  if (!wasCodeView) await ensureBlocksView(cdp);
+  return { ts: r.ts, markers: r.markers || [], switched, startedInCodeView: wasCodeView };
+}
+
+function writeSnapshotFiles(dir, files) {
+  const outDir = path.resolve(dir);
+  fs.mkdirSync(outDir, { recursive: true });
+  const saved = [];
+  for (const name of ["main.ts", "main.blocks", "pxt.json"]) {
+    const value = files[name];
+    if (typeof value === "string" && value.length) {
+      const p = path.join(outDir, name);
+      fs.writeFileSync(p, value);
+      saved.push(p);
+    }
+  }
+  return { dir: outDir, saved };
+}
+
+async function snapshotProject(cdp, dir, { fromEditor = false } = {}) {
+  const state = await readWorkspaceState(cdp);
+  let ts = null;
+  let pxtRaw = null;
+  let pkg = null;
+  let markers = [];
+  let switched = false;
+  let readFromEditor = false;
+
+  // Prefer the persisted workspace unless the caller wants the live editor.
+  if (state.ts && !fromEditor) {
+    ts = state.ts;
+    pxtRaw = state.pxt || null;
+  }
+
+  if (!ts) {
+    const pkgInfo = await readProjectPackage(cdp);
+    pxtRaw = pkgInfo.raw;
+    pkg = pkgInfo.pkg;
+    const src = await readEditorSource(cdp);
+    ts = src.ts;
+    markers = src.markers;
+    switched = src.switched;
+    readFromEditor = true;
+  } else if (!pxtRaw) {
+    const pkgInfo = await readProjectPackage(cdp);
+    pxtRaw = pkgInfo.raw;
+    pkg = pkgInfo.pkg;
+  }
+
+  if (!ts) throw new Error("main.ts not found in the workspace or editor");
+
+  let project = pkg?.name || state.name || null;
+  if (!project && pxtRaw) {
+    try {
+      project = JSON.parse(pxtRaw).name || null;
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const written = writeSnapshotFiles(dir, {
+    "main.ts": ts,
+    "main.blocks": state.blocks,
+    "pxt.json": pxtRaw,
+  });
+
+  if (markers.length) {
+    warn(`snapshot has TypeScript markers: ${markers.join(" | ")}`);
+  }
+
+  return {
+    dir: written.dir,
+    project,
+    editor: state.editor || null,
+    modified: state.modified || null,
+    sessionOnly: !!state.sessionOnly,
+    files: state.files || [],
+    historyCount: state.historyCount || 0,
+    tsLen: ts.length,
+    blocksLen: (state.blocks || "").length,
+    markers,
+    readFromEditor,
+    switchedToCodeView: switched,
+    saved: written.saved,
+  };
+}
+
+function printSnapshot(info) {
+  out(`Project: ${info.project || "(unnamed)"}`);
+  out(`saved:   ${info.dir}`);
+  for (const p of info.saved) out(`  ${p}`);
+  out(`read:    ${info.readFromEditor ? "live editor" : "persisted workspace"}`);
+  out(`main.ts: ${info.tsLen} chars${info.blocksLen ? `, main.blocks: ${info.blocksLen} chars` : ""}`);
+  if (info.sessionOnly) {
+    out("session-only workspace: main.blocks is only in the page; keep the tab open");
+  }
+  if (info.markers.length) out(`markers: ${info.markers.join(" | ")}`);
+}
+
+// ---------------------------------------------------------------------------
 // build / download
 // ---------------------------------------------------------------------------
 
@@ -2192,7 +2408,8 @@ async function main() {
     } else {
       const target = parseCdpTarget(o.cdp);
       const pages = await fetchPages(target);
-      const readOnlyMode = mode === "list-extensions" || mode === "search-extensions";
+      const readOnlyMode =
+        mode === "list-extensions" || mode === "search-extensions" || mode === "snapshot";
       let page = await selectPage(pages, o, {
         allowMissingProject: !!o.project && o.create && !readOnlyMode,
       });
@@ -2236,6 +2453,19 @@ async function main() {
         .catch(() => "");
       const tabProject = projectName || o.project || null;
       result.tab = { id: page.id, project: tabProject, url: currentUrl };
+
+      if (mode === "snapshot") {
+        const t = Date.now();
+        const info = await snapshotProject(cdp, o.snapshotDir, {
+          fromEditor: o.fromEditor,
+        });
+        result.snapshot = info;
+        result.timings.snapshot = Date.now() - t;
+        result.timings.total = Date.now() - t0;
+        if (ui.json) console.log(JSON.stringify(result, null, 2));
+        else printSnapshot(info);
+        return 0;
+      }
 
       if (mode === "list-extensions") {
         const te = Date.now();

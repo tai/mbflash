@@ -1,7 +1,7 @@
 {
   "name": "mbflash",
-  "version": "1.3.0",
-  "description": "Load, build, flash, and manage extensions for micro:bit MakeCode projects over CDP",
+  "version": "1.4.1",
+  "description": "Load, build, flash, snapshot, and manage extensions for micro:bit MakeCode projects over CDP",
   "type": "module",
   "bin": {
     "mbflash": "mbflash.mjs"

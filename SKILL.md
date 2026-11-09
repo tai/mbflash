@@ -6,12 +6,13 @@ description: >
   into a live MakeCode tab, rebuilds Blocks, builds the .hex, and flashes the
   MICROBIT volume over CDP without WebUSB. Install mbflash before using this
   skill. Use when asked to change MakeCode code, sync text with Blocks, compile
-  a .hex, flash a micro:bit, or search/list/install MakeCode extensions before
-  writing code. Triggers: MakeCode, micro:bit, mbflash, makecode.microbit.org,
-  main.ts, main.blocks, pxt.json, IconNames, Blocks view, MakeCode extension,
-  pxt.json dependency, flash micro:bit, MICROBIT drive, DAPLink, Chromium remote
-  debugging, version control of a MakeCode project, panic 927, V1/V2 firmware
-  mismatch.
+  a .hex, flash a micro:bit, snapshot/read the project back to disk, or
+  search/list/install/remove MakeCode extensions before writing code. Triggers:
+  MakeCode, micro:bit, mbflash, makecode.microbit.org, main.ts, main.blocks,
+  pxt.json, IconNames, Blocks view, MakeCode extension, pxt.json dependency,
+  snapshot project, read project back, flash micro:bit, MICROBIT drive, DAPLink,
+  Chromium remote debugging, version control of a MakeCode project, panic 927,
+  V1/V2 firmware mismatch.
 ---
 
 # MakeCode (micro:bit) with mbflash
@@ -35,7 +36,7 @@ behaves* (they watch the board and the on-screen simulator). Never reverse that.
 
 ```sh
 command -v mbflash >/dev/null || npm i -g mbflash
-mbflash --version        # 1.3.x or newer (extension commands need 1.3.0+)
+mbflash --version        # 1.4.1 or newer
 mbflash --skill          # print this document (bundled with mbflash)
 ```
 
@@ -43,8 +44,7 @@ mbflash --skill          # print this document (bundled with mbflash)
 - npm package: <https://www.npmjs.com/package/mbflash>
 - Requires Node.js **22.4+**. No runtime dependencies. `npx -y mbflash` works
   too, but this skill assumes `mbflash` is on `PATH`.
-- If `mbflash --version` is older than 1.3.0, upgrade to use the extension
-  commands: `npm i -g mbflash@latest`.
+- If `mbflash --version` is older than 1.4.1, upgrade: `npm i -g mbflash@latest`.
 - `mbflash --skill` prints the canonical copy of this file, so it can also be
   installed manually: `mbflash --skill > SKILL.md`.
 
@@ -59,7 +59,7 @@ mbflash --skill          # print this document (bundled with mbflash)
 | Compile + download `.hex` | mbflash | drives the caret menu, validates the file |
 | Flash the board | mbflash | copies to `MICROBIT`, waits for remount |
 | Round-trip check (JS → Blocks → JS) | mbflash | `--roundtrip`, reports textual differences |
-| Read the project back out | **snapshot.mjs** | mbflash has no source read command |
+| Read the project back out | mbflash | `--snapshot [dir]`, `--from-editor`, `--json` |
 | Decide V1 vs V2 | **you** | mbflash cannot detect the board version |
 | Verify the program's behaviour | **the human** | never probe the simulator |
 
@@ -69,8 +69,8 @@ workaround to improve on.
 
 ## Golden rules
 
-1. **Snapshot before overwriting.** mbflash writes and flashes; it cannot read
-   the current project. Run the bundled snapshot helper first (§3).
+1. **Snapshot before overwriting.** mbflash writes and flashes; before a
+   destructive edit run `mbflash --snapshot .` (§3).
 2. **Check the board version before using V2-only APIs.** A V2 API compiles on a
    V1 board and panics **927** at runtime (§2).
 3. **One tab per project.** Select with `--project` or `--target`; never guess a
@@ -217,41 +217,45 @@ mbflash --project MyProject --remove-extension servo --remove-extension neopixel
   gallery has no match, use the package URL/spec rather than hand-editing
   `pxt.json`.
 
-## 3. Read before writing: snapshot.mjs
+## 3. Read before writing: `mbflash --snapshot`
 
 `main.ts` on disk is the agent's editing surface, not necessarily the current
-project. Before a destructive edit, read the browser state with the one helper
-mbflash does not replace. It lives in `scripts/` next to this `SKILL.md`; below,
-`<skill-dir>` means that directory:
+project. Before a destructive edit, snapshot the browser state:
 
 ```sh
 mbflash --list
-node <skill-dir>/scripts/snapshot.mjs . --target <id>               # persisted workspace
-node <skill-dir>/scripts/snapshot.mjs . --target <id> --from-editor # session-only workspace
+mbflash --snapshot . --target <id>               # persisted workspace
+mbflash --snapshot . --target <id> --from-editor # force the live editor
 ```
 
-It writes whichever of `main.ts`, `main.blocks`, `pxt.json` exist and prints a
-summary: `editor`, `name`, `modified`, `files`, `historyCount`, `sessionOnly`,
-character counts, and where it saved. Add `--json` for the machine-readable form,
-`--from-editor` to also read the live TypeScript out of the editor.
+`--snapshot [dir]` writes whichever of `main.ts`, `main.blocks`, `pxt.json` are
+available and prints a summary: `editor`, `name`, `modified`, `files`,
+`historyCount`, `sessionOnly`, character counts, markers and where it saved.
+Add `--json` for the machine-readable form. The directory defaults to `.`.
 
 How to read the result:
 
-- `editor: "blocksprj"` — **Blocks are authoritative**; `main.ts` may be stale or
-  empty. The human's visual truth is `main.blocks`.
+- `editor: "blocksprj"` — **Blocks are authoritative**; `main.ts` may be stale,
+  but `--snapshot` reads the live editor source when the workspace is
+  session-only.
 - `editor: "tsprj"` — TypeScript is authoritative.
 - `sessionOnly: true` (empty IndexedDB) — the project exists only in page memory
-  and is **lost on reload**. Run again with `--from-editor`; that switches to the
-  JavaScript view, converts the blocks and saves `main.ts`. Tell the human to
-  keep the tab open (or sign in to persist), and treat the source you just saved
-  as the only durable copy besides the `.hex`.
+  and is **lost on reload**. `--snapshot` reads `main.ts` from the editor and
+  saves it; `main.blocks` is not available in this mode. Tell the human to keep
+  the tab open (or sign in to persist), and treat the saved source as the only
+  durable copy besides the `.hex`.
+- `markers` — TypeScript errors found while reading; they are warnings and the
+  files are still written.
+- `--from-editor` forces the live editor path even when IndexedDB has a
+  persisted copy. Use it after Blocks edits that have not been persisted.
+- `--snapshot` restores the Blocks/JavaScript view it started in.
 
 Before replacing a program, keep the old source as `previous-<name>.ts`; the app
 history (`_history` in IndexedDB) only helps when the workspace persists.
 
 Do not try to serialize Blockly from the page: this build ships Blockly 10,
-where `Blockly.Xml`, `Blockly.common` and `getMainWorkspace` are gone. Go through
-IndexedDB or the JavaScript view. `document.querySelectorAll(".blocklyDraggable").length`
+where `Blockly.Xml`, `Blockly.common` and `getMainWorkspace` are gone. Use
+`--snapshot` (IndexedDB or the JavaScript view). `document.querySelectorAll(".blocklyDraggable").length`
 also counts the flyout — treat it as "blocks rendered", not an exact count.
 
 ## 4. Write and run
@@ -455,15 +459,15 @@ flashed `.hex` are the only safety nets.
 
 ## Reference
 
-`scripts/snapshot.mjs` is the only bundled helper. Everything else mbflash
-provides, so the old `push`, `to-blocks`, `roundtrip`, `download` and `flash`
-scripts were removed:
+Everything needed for the workflow is in mbflash; no separate snapshot helper
+or old `push`/`to-blocks`/`roundtrip`/`download`/`flash` scripts are required:
 
 ```sh
-node <skill-dir>/scripts/snapshot.mjs [dir] [--target <id>] [--from-editor] [--json]
+mbflash --list
+mbflash --snapshot [dir] [--from-editor] [--json]
 ```
 
-It uses only Node 22+ built-ins (`fetch`, `WebSocket`) and needs a single
+mbflash uses only Node 22+ built-ins (`fetch`, `WebSocket`) and needs a single
 reachable MakeCode tab (`MBFLASH_CDP` overrides the default `127.0.0.1:9222`).
-For anything involving loading, converting, building or flashing, use mbflash:
+Source, releases and full option reference:
 <https://github.com/tai/mbflash>.

@@ -38,6 +38,8 @@ test("help documents extension handling", () => {
   assert.match(r.stdout, /--remove-extension <spec>/);
   assert.match(r.stdout, /--list-extensions/);
   assert.match(r.stdout, /--search-extensions <q>/);
+  assert.match(r.stdout, /--snapshot \[dir\]/);
+  assert.match(r.stdout, /--from-editor/);
   assert.match(r.stdout, /--skill/);
 });
 
@@ -120,6 +122,48 @@ test("--list-extensions and --search-extensions are exclusive", () => {
   const r = run(["--list-extensions", "--search-extensions", "servo"]);
   assert.equal(r.status, 2);
   assert.match(r.stderr, /choose only one of --list-extensions and --search-extensions/);
+});
+
+test("--snapshot is read-only", () => {
+  const r = run(["--snapshot", "--load-only", "main.ts"]);
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /--snapshot only reads the project/);
+});
+
+test("--snapshot does not install extensions", () => {
+  const r = run(["--snapshot", "--extension", "servo"]);
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /--snapshot does not install or remove extensions/);
+});
+
+test("--snapshot does not remove extensions", () => {
+  const r = run(["--snapshot", "--remove-extension", "servo"]);
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /--snapshot does not install or remove extensions/);
+});
+
+test("--snapshot is exclusive with list modes", () => {
+  const r = run(["--snapshot", "--list-extensions"]);
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /--snapshot is its own read mode/);
+});
+
+test("--snapshot needs a browser, not --flash-hex", () => {
+  const r = run(["--snapshot", "--flash-hex", "demo.hex"]);
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /--snapshot only reads the project/);
+});
+
+test("--snapshot does not retitle the tab", () => {
+  const r = run(["--snapshot", "--project", "Foo", "--retitle"]);
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /--snapshot does not retitle the tab/);
+});
+
+test("--from-editor only applies to --snapshot", () => {
+  const r = run(["--from-editor"]);
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /--from-editor only applies to --snapshot/);
 });
 
 test("--load-only requires a source", () => {
