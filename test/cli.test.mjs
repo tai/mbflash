@@ -31,6 +31,97 @@ test("help documents project selection and switch", () => {
   assert.match(r.stdout, /--retitle/);
 });
 
+test("help documents extension handling", () => {
+  const r = run(["--help"]);
+  assert.equal(r.status, 0);
+  assert.match(r.stdout, /--extension <spec>/);
+  assert.match(r.stdout, /--remove-extension <spec>/);
+  assert.match(r.stdout, /--list-extensions/);
+  assert.match(r.stdout, /--search-extensions <q>/);
+  assert.match(r.stdout, /--skill/);
+});
+
+test("--skill prints the bundled skill exactly", () => {
+  const skill = readFileSync(fileURLToPath(new URL("../SKILL.md", import.meta.url)), "utf8");
+  const r = run(["--skill"]);
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout, skill);
+  assert.match(r.stdout, /^---\nname: makecode-microbit/);
+  assert.match(r.stdout, /--search-extensions/);
+});
+
+test("--search-extensions requires a value", () => {
+  const r = run(["--search-extensions"]);
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /--search-extensions requires a value/);
+});
+
+test("--extension needs a browser, not --flash-hex", () => {
+  const r = run(["--extension", "servo", "--flash-hex", "demo.hex"]);
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /--extension needs a browser tab/);
+});
+
+test("--list-extensions is read-only", () => {
+  const r = run(["--list-extensions", "main.ts"]);
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /--list-extensions only reads the selected project/);
+});
+
+test("--list-extensions cannot install", () => {
+  const r = run(["--list-extensions", "--extension", "servo"]);
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /--list-extensions does not install extensions/);
+});
+
+test("--search-extensions cannot install", () => {
+  const r = run(["--search-extensions", "servo", "--extension", "servo"]);
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /--search-extensions does not install extensions/);
+});
+
+test("--extension requires a non-empty spec", () => {
+  const r = run(["--extension="]);
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /--extension requires a non-empty spec/);
+});
+
+test("--remove-extension requires a non-empty spec", () => {
+  const r = run(["--remove-extension="]);
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /--remove-extension requires a non-empty spec/);
+});
+
+test("--extension and --remove-extension are exclusive", () => {
+  const r = run(["--extension", "servo", "--remove-extension", "servo"]);
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /choose --extension or --remove-extension/);
+});
+
+test("--remove-extension needs a browser, not --flash-hex", () => {
+  const r = run(["--remove-extension", "servo", "--flash-hex", "demo.hex"]);
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /--remove-extension needs a browser tab/);
+});
+
+test("--list-extensions does not remove extensions", () => {
+  const r = run(["--list-extensions", "--remove-extension", "servo"]);
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /--list-extensions does not remove extensions/);
+});
+
+test("--search-extensions does not remove extensions", () => {
+  const r = run(["--search-extensions", "servo", "--remove-extension", "servo"]);
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /--search-extensions does not remove extensions/);
+});
+
+test("--list-extensions and --search-extensions are exclusive", () => {
+  const r = run(["--list-extensions", "--search-extensions", "servo"]);
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /choose only one of --list-extensions and --search-extensions/);
+});
+
 test("--load-only requires a source", () => {
   const r = run(["--load-only"]);
   assert.equal(r.status, 2);

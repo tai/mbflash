@@ -81,6 +81,11 @@ function defaults() {
     flashHex: undefined,
     noBlocks: false,
     roundtrip: false,
+    extensions: [],
+    removeExtensions: [],
+    listExtensions: false,
+    searchExtensions: undefined,
+    skill: false,
     downloadDir: process.env.MBFLASH_DOWNLOAD_DIR || path.join(cache, "mbflash", "hex"),
     hexOut: undefined,
     device: process.env.MBFLASH_DEVICE || undefined,
@@ -218,6 +223,21 @@ function parseArgs(argv) {
       case "--roundtrip":
         o.roundtrip = true;
         break;
+      case "--extension":
+        o.extensions.push(value());
+        break;
+      case "--remove-extension":
+        o.removeExtensions.push(value());
+        break;
+      case "--list-extensions":
+        o.listExtensions = true;
+        break;
+      case "--search-extensions":
+        o.searchExtensions = value();
+        break;
+      case "--skill":
+        o.skill = true;
+        break;
       case "--download-dir":
         o.downloadDir = value();
         break;
@@ -243,6 +263,13 @@ function parseArgs(argv) {
     usage("--project and --label must name the same project");
   }
   o.project = o.project || o.label;
+  if (o.extensions.some((s) => !String(s).trim())) usage("--extension requires a non-empty spec");
+  if (o.removeExtensions.some((s) => !String(s).trim())) {
+    usage("--remove-extension requires a non-empty spec");
+  }
+  if (o.extensions.length && o.removeExtensions.length) {
+    usage("choose --extension or --remove-extension, not both");
+  }
   o.timeoutMs = Math.round(o.timeoutSec * 1000);
   o.waitMs = Math.round(o.waitSec * 1000);
   return o;
@@ -255,6 +282,50 @@ function resolveMode(o) {
   }
   if (o.retitle && !o.project) usage("--retitle needs --project (or the --label alias)");
 
+  if (o.listExtensions && o.searchExtensions !== undefined) {
+    usage("choose only one of --list-extensions and --search-extensions");
+  }
+  if (o.listExtensions) {
+    if (
+      o.source !== undefined ||
+      o.loadOnly ||
+      o.hexOnly ||
+      o.flashOnly ||
+      o.flashHex ||
+      o.switch
+    ) {
+      usage("--list-extensions only reads the selected project; do not combine it with a source or other modes");
+    }
+    if (o.extensions.length) {
+      usage("--list-extensions does not install extensions; use --extension on its own");
+    }
+    if (o.removeExtensions.length) {
+      usage("--list-extensions does not remove extensions; use --remove-extension on its own");
+    }
+    if (o.noBlocks || o.roundtrip) usage("--no-blocks/--roundtrip only apply when loading a source");
+    return "list-extensions";
+  }
+  if (o.searchExtensions !== undefined) {
+    if (
+      o.source !== undefined ||
+      o.loadOnly ||
+      o.hexOnly ||
+      o.flashOnly ||
+      o.flashHex ||
+      o.switch
+    ) {
+      usage("--search-extensions only searches the gallery; do not combine it with a source or other modes");
+    }
+    if (o.extensions.length) {
+      usage("--search-extensions does not install extensions; use --extension to install");
+    }
+    if (o.removeExtensions.length) {
+      usage("--search-extensions does not remove extensions; use --remove-extension to remove");
+    }
+    if (o.noBlocks || o.roundtrip) usage("--no-blocks/--roundtrip only apply when loading a source");
+    return "search-extensions";
+  }
+
   if (o.switch) {
     if (o.source !== undefined || o.loadOnly || o.hexOnly || o.flashOnly || o.flashHex) {
       usage("--switch only selects/focuses a tab; do not combine it with a source or build/flash mode");
@@ -266,6 +337,10 @@ function resolveMode(o) {
   if (o.flashHex) {
     if (o.source !== undefined) usage("--flash-hex does not take a source file");
     if (o.project || o.retitle) usage("--project/--retitle require a browser tab");
+    if (o.extensions.length) usage("--extension needs a browser tab; do not combine it with --flash-hex");
+    if (o.removeExtensions.length) {
+      usage("--remove-extension needs a browser tab; do not combine it with --flash-hex");
+    }
     if (o.noBlocks || o.roundtrip) usage("--no-blocks/--roundtrip only apply when loading a source");
     return "flash-hex";
   }
@@ -291,9 +366,11 @@ function resolveMode(o) {
   }
 
   if (o.source) return "load+build+flash";
+  if (o.extensions.length) return "install";
+  if (o.removeExtensions.length) return "remove";
   usage(
     "provide a source file (e.g. mbflash main.ts) or a mode: " +
-      "--load-only, --hex-only, --flash-only, --flash-hex",
+      "--load-only, --hex-only, --flash-only, --flash-hex, --extension, --remove-extension",
   );
 }
 
@@ -310,6 +387,10 @@ Modes:
   --flash-only           build/flash the code already in the editor
   --flash-hex <file>     flash an existing .hex (no CDP)
   --switch               focus the selected tab and exit (no build)
+  --extension <spec>     ensure extension(s) are installed, then continue
+  --remove-extension <spec> remove extension(s), then continue
+  --list-extensions      list the project's dependencies and exit
+  --search-extensions <q> search the live extension gallery and exit
 
 Target selection:
   --cdp <[ip:]port>      CDP endpoint (default 127.0.0.1:9222)
@@ -336,12 +417,19 @@ Loading:
   --no-blocks            load TS only; do not convert to Blocks
   --roundtrip            JS -> Blocks -> JS check after loading
 
+Extensions:
+  --extension <spec>     install missing extension(s) before loading; repeatable
+  --remove-extension <spec> remove extension(s) via the Explorer; repeatable
+  --list-extensions      list installed dependencies (defaults vs extensions)
+  --search-extensions <q> search the gallery (bundled + approved packages)
+
 Other:
   -j, --json             machine-readable summary on stdout
   -q, --quiet            suppress progress
   -v, --verbose          more detail
   -h, --help             this help
   -V, --version          print the version
+  --skill                print the bundled SKILL.md and exit
 
 Examples:
   mbflash main.ts
@@ -355,6 +443,12 @@ Examples:
   mbflash --project Test2 main.ts
   mbflash --project Test3 main.ts     # creates Test3 if it does not exist
   mbflash --label Test1 --switch      # deprecated alias for --project
+  mbflash --list-extensions
+  mbflash --search-extensions servo
+  mbflash --project ServoDemo --extension servo main.ts
+  mbflash --project Demo --extension servo --extension neopixel main.ts
+  mbflash --project ServoDemo --remove-extension servo --switch
+  mbflash --skill > SKILL.md
 `);
 }
 
@@ -823,8 +917,7 @@ async function modalText(cdp) {
   })()`);
 }
 
-async function ensureCodeView(cdp) {
-  const state = () =>
+async function ensureCodeView(cdp) {  const state = () =>
     cdp.ev(`(() => {
       const m = typeof monaco !== 'undefined' && monaco.editor
         ? monaco.editor.getModels().find(x => x.uri.toString().includes('main.ts'))
@@ -838,32 +931,71 @@ async function ensureCodeView(cdp) {
   let s = await state();
   if (s.visible && s.value !== null) return false;
 
-  const clicked = await cdp.ev(`(() => {
-    const b = document.querySelector('[aria-label="Convert code to JavaScript"]');
-    if (!b) return false;
-    b.click();
-    return true;
-  })()`);
-  if (!clicked) throw new Error("JavaScript view toggle not found");
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const clicked = await cdp.ev(`(() => {
+      const b = document.querySelector('[aria-label="Convert code to JavaScript"]');
+      if (!b) return false;
+      b.click();
+      return true;
+    })()`);
+    if (!clicked) throw new Error("JavaScript view toggle not found");
 
-  // Wait for the model to exist AND stop changing: `.monaco-editor` becomes
-  // visible before a Blocks -> JS conversion has finished rewriting main.ts.
-  const deadline = Date.now() + 15000;
-  let last = null;
-  let stable = 0;
-  while (Date.now() < deadline) {
-    await sleep(200);
-    s = await state();
-    if (s.visible && s.value !== null) {
-      if (s.value === last) {
-        if (++stable >= 2) return true;
-      } else {
-        last = s.value;
-        stable = 0;
+    // Wait for the model to exist AND stop changing: `.monaco-editor` becomes
+    // visible before a Blocks -> JS conversion has finished rewriting main.ts.
+    const deadline = Date.now() + (attempt === 0 ? 15000 : 10000);
+    let last = null;
+    let stable = 0;
+    while (Date.now() < deadline) {
+      await sleep(200);
+      s = await state();
+      if (s.visible && s.value !== null) {
+        if (s.value === last) {
+          if (++stable >= 2) return true;
+        } else {
+          last = s.value;
+          stable = 0;
+        }
       }
+    }
+
+    // The editor can be busy right after an extension install; the click is
+    // sometimes swallowed. Try once more before giving up.
+    if (attempt === 0) {
+      debug("code view did not appear; retrying the JavaScript toggle");
+      await sleep(1000);
+      s = await state();
+      if (s.visible && s.value !== null) return true;
     }
   }
   throw new Error("code view did not appear");
+}
+
+async function ensureBlocksView(cdp) {
+  const active = await cdp
+    .ev(`/blocks-menuitem selected active/.test(document.querySelector('.blocks-menuitem')?.className || '')`)
+    .catch(() => false);
+  if (active) return true;
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await cdp
+      .ev(`document.querySelector('[aria-label="Convert code to Blocks"]')?.click()`)
+      .catch(() => {});
+    for (let i = 0; i < 25; i++) {
+      const visible = await cdp
+        .ev(`(() => {
+          const e = document.querySelector('#blocksEditor');
+          return !!e && e.getBoundingClientRect().width > 0;
+        })()`)
+        .catch(() => false);
+      if (visible) return true;
+      await sleep(150);
+    }
+    if (attempt === 0) {
+      debug("Blocks view did not appear; retrying the Blocks toggle");
+      await sleep(800);
+    }
+  }
+  return false;
 }
 
 async function loadSource(cdp, source) {
@@ -937,7 +1069,7 @@ async function toBlocks(cdp) {
 
     if (r.ok) return r.blocks;
     if (r.noButton) throw new Error("Blocks toggle not found");
-    if (attempt === 0) {
+    if (attempt === 0 && !r.modal) {
       // The JS -> Blocks click can land while the previous conversion is still
       // settling; give it a moment and try once more.
       debug("Blocks conversion did not complete; retrying once");
@@ -966,6 +1098,753 @@ async function roundtrip(cdp, source) {
   await sleep(250);
   const blocks = await toBlocks(cdp);
   return { identical, blocks, ts: r.ts };
+}
+
+// ---------------------------------------------------------------------------
+// extensions
+// ---------------------------------------------------------------------------
+
+// These are present in a fresh micro:bit project; they are dependencies but
+// not "extensions" a human added.
+const DEFAULT_DEPS = new Set(["core", "radio", "microphone"]);
+
+function extensionSpecNames(spec) {
+  const names = new Set();
+  const raw = String(spec || "").trim();
+  if (!raw) return names;
+
+  if (!/[:/]/.test(raw)) {
+    names.add(raw.toLowerCase());
+    if (/^pxt-/i.test(raw)) names.add(raw.slice(4).toLowerCase());
+    return names;
+  }
+
+  const cleaned = raw
+    .replace(/^github:/i, "")
+    .replace(/^https?:\/\/github\.com\//i, "")
+    .replace(/^git@github\.com:/i, "")
+    .replace(/\.git$/i, "")
+    .replace(/#.*$/, "")
+    .replace(/\/+$/, "");
+  const parts = cleaned.split("/").filter(Boolean);
+  if (parts.length >= 2) {
+    names.add(`${parts[0]}/${parts[1]}`.toLowerCase());
+    const repo = parts[1].toLowerCase();
+    names.add(repo);
+    if (repo.startsWith("pxt-")) names.add(repo.slice(4));
+  } else if (parts.length === 1) {
+    names.add(parts[0].toLowerCase());
+  }
+  return names;
+}
+
+function findInstalledDep(deps, spec) {
+  const names = extensionSpecNames(spec);
+  for (const [name, depSpec] of Object.entries(deps || {})) {
+    const keyNames = new Set([name.toLowerCase()]);
+    if (/^pxt-/i.test(name)) keyNames.add(name.slice(4).toLowerCase());
+    const valueNames = /^(github:|https?:)/i.test(String(depSpec || ""))
+      ? extensionSpecNames(depSpec)
+      : new Set();
+    for (const n of names) {
+      if (n && (keyNames.has(n) || valueNames.has(n))) return { name, spec: depSpec };
+    }
+  }
+  return null;
+}
+
+function extensionSearchQuery(spec) {
+  const raw = String(spec || "").trim();
+  if (/^github:/i.test(raw)) {
+    return `https://github.com/${raw.replace(/^github:/i, "").replace(/#.*$/, "")}`;
+  }
+  if (/^https?:\/\//i.test(raw)) return raw.replace(/#.*$/, "");
+  if (/^[^/\s]+\/[^/\s]+/.test(raw) && !/\s/.test(raw)) {
+    return `https://github.com/${raw.replace(/#.*$/, "")}`;
+  }
+  return raw;
+}
+
+function pickExtensionCard(cards, spec) {
+  const names = extensionSpecNames(spec);
+  const lower = (s) => String(s || "").toLowerCase();
+  const exact = cards.find((c) => names.has(lower(c.name)));
+  if (exact) return exact;
+  if (/^(https?:|github:)/i.test(spec) && cards.length === 1) return cards[0];
+  const contains = cards.filter((c) => [...names].some((n) => n && lower(c.name).includes(n)));
+  return contains.length === 1 ? contains[0] : null;
+}
+
+async function settingsGoBack(cdp) {
+  await cdp.ev(`(() => {
+    const b = [...document.querySelectorAll('button')].find(e => (e.textContent || '').trim() === 'Go back');
+    if (b) b.click();
+    return !!b;
+  })()`).catch(() => false);
+}
+
+async function openProjectSettingsText(cdp) {
+  const r = await cdp.ev(`(async () => {
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    const vis = e => !!(e.offsetWidth || e.offsetHeight);
+    const findButton = (text) => [...document.querySelectorAll('button')]
+      .find(e => vis(e) && (e.textContent || '').trim() === text);
+
+    // Leave any open settings view so the text model is reloaded from the project.
+    const back = [...document.querySelectorAll('button')].find(e => (e.textContent || '').trim() === 'Go back');
+    if (back) { back.click(); await sleep(400); }
+
+    const settings = [...document.querySelectorAll('button')]
+      .find(e => vis(e) && e.getAttribute('title') === 'Settings');
+    if (!settings) return { ok: false, error: 'Settings button not found' };
+
+    let item = [...document.querySelectorAll('[role="menuitem"]')]
+      .find(e => vis(e) && (e.textContent || '').trim() === 'Project Settings');
+    for (let attempt = 0; attempt < 2 && !item; attempt++) {
+      settings.click();
+      for (let i = 0; i < 20; i++) {
+        await sleep(100);
+        item = [...document.querySelectorAll('[role="menuitem"]')]
+          .find(e => vis(e) && (e.textContent || '').trim() === 'Project Settings');
+        if (item) break;
+      }
+      if (!item) await sleep(400);
+    }
+    if (!item) return { ok: false, error: 'Project Settings menu item not found' };
+    item.click();
+    await sleep(500);
+
+    let edit = null;
+    for (let i = 0; i < 30; i++) {
+      await sleep(100);
+      edit = findButton('Edit settings as text');
+      if (edit) break;
+    }
+    if (edit) {
+      edit.click();
+      await sleep(400);
+      const cont = findButton('Continue');
+      if (cont) cont.click();
+    }
+    return { ok: true };
+  })()`, 20000);
+  if (!r?.ok) throw new Error(r?.error || "could not open project settings");
+}
+
+async function readProjectPackage(cdp) {
+  await dismissDialogs(cdp);
+  const wasCodeView = await cdp
+    .ev(`(() => {
+      const js = document.querySelector('[aria-label="Convert code to Blocks"]');
+      return !!document.querySelector('.monaco-editor')?.getBoundingClientRect().width && !!js;
+    })()`)
+    .catch(() => false);
+  debug(`reading pxt.json from ${wasCodeView ? "the code view" : "the blocks view"}`);
+  await openProjectSettingsText(cdp);
+
+  const raw = await cdp.ev(`(async () => {
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    let model = null;
+    for (let i = 0; i < 80; i++) {
+      await sleep(150);
+      const ta = document.querySelector('textarea.inputarea');
+      model = typeof monaco !== 'undefined' && monaco.editor
+        ? monaco.editor.getModels().find(x => x.uri.toString().includes('pxt.json'))
+        : null;
+      if (model && ta && /"dependencies"\\s*:/.test(ta.value || '')) break;
+    }
+    if (!model) return null;
+    // Let the settings view finish loading the file before reading it.
+    await sleep(1200);
+    return model.getValue();
+  })()`, 20000);
+
+  await settingsGoBack(cdp);
+  await sleep(600);
+
+  if (wasCodeView) {
+    const mainIsActive = () =>
+      cdp
+        .ev(`(() => {
+          const ta = document.querySelector('textarea.inputarea');
+          const m = typeof monaco !== 'undefined'
+            ? monaco.editor.getModels().find(x => x.uri.toString().includes('main.ts'))
+            : null;
+          return !!(ta && m && ta.value === m.getValue());
+        })()`)
+        .catch(() => false);
+    if (!(await mainIsActive())) {
+      await cdp
+        .ev(`document.querySelector('[aria-label="Convert code to JavaScript"]')?.click()`)
+        .catch(() => {});
+      for (let i = 0; i < 20; i++) {
+        if (await mainIsActive()) break;
+        await sleep(150);
+      }
+    }
+    debug("pxt.json read: restored the code view");
+  } else {
+    const ok = await ensureBlocksView(cdp);
+    debug(`pxt.json read: blocks restore ${ok ? "ok" : "failed"}`);
+    const stayed = await cdp
+      .ev(`(() => {
+        const vis = e => !!(e.offsetWidth || e.offsetHeight);
+        const b = [...document.querySelectorAll('button')]
+          .find(e => vis(e) && (e.textContent || '').trim() === 'Stay in JavaScript');
+        if (b) { b.click(); return true; }
+        return false;
+      })()`)
+      .catch(() => false);
+    if (stayed) debug("pxt.json read: stayed in JavaScript after a failed Blocks conversion");
+  }
+
+  if (!raw) throw new Error("could not read pxt.json from the editor");
+  let pkg;
+  try {
+    pkg = JSON.parse(raw);
+  } catch (e) {
+    throw new Error(`pxt.json is not valid JSON: ${e.message}`);
+  }
+  if (!pkg || typeof pkg !== "object" || !pkg.dependencies) {
+    throw new Error("pxt.json has no dependencies");
+  }
+  return { raw, pkg };
+}
+
+async function openExtensionsGallery(cdp) {
+  const already = await cdp
+    .ev(`!!document.querySelector('.extensions-browser')?.offsetWidth`)
+    .catch(() => false);
+  if (!already) await dismissDialogs(cdp);
+  const r = await cdp.ev(`(async () => {
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    const vis = e => !!(e.offsetWidth || e.offsetHeight);
+    const gallery = () => {
+      const g = document.querySelector('.extensions-browser');
+      return g && vis(g) ? g : null;
+    };
+    if (gallery()) return { ok: true, already: true };
+
+    let item = [...document.querySelectorAll('[role="menuitem"]')]
+      .find(e => vis(e) && (e.textContent || '').trim() === 'Extensions');
+    if (!item) {
+      const settings = [...document.querySelectorAll('button')]
+        .find(e => vis(e) && e.getAttribute('title') === 'Settings');
+      if (settings) {
+        for (let attempt = 0; attempt < 2 && !item; attempt++) {
+          settings.click();
+          for (let i = 0; i < 20; i++) {
+            await sleep(100);
+            item = [...document.querySelectorAll('[role="menuitem"]')]
+              .find(e => vis(e) && (e.textContent || '').trim() === 'Extensions');
+            if (item) break;
+          }
+          if (!item) await sleep(400);
+        }
+      }
+    }
+    if (item) item.click();
+
+    for (let i = 0; i < 80; i++) {
+      await sleep(150);
+      if (gallery()) return { ok: true };
+    }
+    return { ok: false, error: 'extension gallery did not open' };
+  })()`, 20000);
+  if (!r?.ok) throw new Error(r?.error || "could not open the extension gallery");
+}
+
+async function closeExtensionsGallery(cdp) {
+  await cdp.ev(`(async () => {
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    const vis = e => !!(e.offsetWidth || e.offsetHeight);
+    for (let i = 0; i < 40; i++) {
+      const g = document.querySelector('.extensions-browser');
+      if (!g || !vis(g)) return true;
+      const back = [...g.querySelectorAll('button, [role="button"], a')]
+        .find(e => vis(e) && /^Go Back$/i.test((e.textContent || '').trim()));
+      if (back) { back.click(); await sleep(300); continue; }
+
+      const key = Object.keys(g).find(k => k.startsWith('__reactFiber$'));
+      if (key) {
+        let f = g[key];
+        for (let j = 0; f && j < 30; j++, f = f.return) {
+          const p = f.memoizedProps;
+          if (p && typeof p.onRequestClose === 'function') {
+            try { p.onRequestClose(); } catch (e) {}
+            break;
+          }
+        }
+      }
+      await sleep(200);
+    }
+    return false;
+  })()`).catch(() => {});
+}
+
+async function gallerySearch(cdp, query) {
+  const q = String(query ?? "");
+  const r = await cdp.ev(`(async () => {
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    const vis = e => !!(e.offsetWidth || e.offsetHeight);
+    const g = document.querySelector('.extensions-browser');
+    if (!g || !vis(g)) return { ok: false, error: 'extension gallery is not open' };
+    const input = g.querySelector('input.common-input');
+    if (!input) return { ok: false, error: 'gallery search input not found' };
+
+    const titles = () => [...g.querySelectorAll('.common-extension-card')]
+      .map(c => (c.querySelector('.common-extension-card-title')?.textContent || '').trim());
+    const cards = () => [...g.querySelectorAll('.common-extension-card')].map(c => ({
+      name: (c.querySelector('.common-extension-card-title')?.textContent || '').trim(),
+      description: (c.querySelector('.common-extension-card-description')?.textContent || '').replace(/\\s+/g, ' ').trim(),
+      installed: /(^|\\n)Installed(\\n|$)/.test(c.innerText || ''),
+      installable: !!c.querySelector('button.common-card-action'),
+    }));
+
+    const Q = ${JSON.stringify(q)};
+    if (!Q) {
+      const tab = [...g.querySelectorAll('.extension-tags .item, .extension-tags [role="tab"], .extension-tags button')]
+        .find(e => vis(e) && /^Recommended$/i.test((e.textContent || '').trim()));
+      if (tab) tab.click();
+      await sleep(800);
+      return { ok: true, searched: false, cards: cards() };
+    }
+
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+    setter.call(input, Q);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    input.focus();
+    const pressEnter = () => {
+      input.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Enter', code: 'Enter', keyCode: 13, which: 13 }));
+      input.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'Enter', code: 'Enter', keyCode: 13, which: 13 }));
+    };
+    pressEnter();
+
+    let searched = false;
+    let last = null;
+    let stable = 0;
+    let empty = 0;
+    for (let i = 0; i < 80; i++) {
+      await sleep(200);
+      if (/Search Results/.test(g.innerText || '')) searched = true;
+      if (searched) {
+        const t = titles();
+        if (t.length === 0) {
+          if (++empty >= 8) break;
+        } else {
+          empty = 0;
+          const ready = t.every((x) => !!x);
+          if (!ready) {
+            last = t;
+            stable = 0;
+            if (i > 50) break;
+          } else if (JSON.stringify(t) === JSON.stringify(last)) {
+            if (++stable >= 2) break;
+          } else {
+            last = t;
+            stable = 0;
+          }
+        }
+      }
+      if (i === 10 && !searched) pressEnter();
+    }
+    return { ok: true, searched, cards: cards() };
+  })()`, 25000);
+
+  if (!r?.ok) throw new Error(r?.error || "gallery search failed");
+  if (q && !r.searched) {
+    warn(`gallery search for "${q}" did not report results; using the visible list`);
+  }
+  return { query: q, searched: !!r.searched, cards: r.cards || [] };
+}
+
+async function searchGalleryExtensions(cdp, query) {
+  await openExtensionsGallery(cdp);
+  try {
+    const r = await gallerySearch(cdp, query);
+    const cards = r.cards || [];
+    const total = cards.length;
+    let results = cards;
+    if (query) {
+      const q = String(query).toLowerCase();
+      const score = (name) => {
+        const n = String(name || "").toLowerCase();
+        if (n === q) return 0;
+        if (n.startsWith(q)) return 1;
+        if (n.includes(q)) return 2;
+        return 3;
+      };
+      results = [...cards].sort(
+        (a, b) => score(a.name) - score(b.name) || String(a.name).localeCompare(String(b.name)),
+      );
+    }
+    const limit = 25;
+    return {
+      query,
+      searched: r.searched,
+      total,
+      truncated: results.length > limit,
+      results: results.slice(0, limit),
+    };
+  } finally {
+    await closeExtensionsGallery(cdp).catch(() => {});
+  }
+}
+
+async function installExtensionCard(cdp, spec) {
+  await openExtensionsGallery(cdp);
+  try {
+    const search = await gallerySearch(cdp, extensionSearchQuery(spec));
+    const card = pickExtensionCard(search.cards, spec);
+    if (!card) {
+      const candidates = search.cards.slice(0, 10).map((c) => c.name).filter(Boolean);
+      throw new Error(
+        `extension "${spec}" not found in the gallery` +
+          (candidates.length ? `; candidates: ${candidates.join(", ")}` : ""),
+      );
+    }
+    if (card.installed) {
+      step(`Extension ${spec} is already shown as installed`);
+      return;
+    }
+    if (!card.installable) throw new Error(`extension "${spec}" is not installable from the gallery`);
+
+    const clicked = await cdp.ev(`(() => {
+      const g = document.querySelector('.extensions-browser');
+      if (!g) return false;
+      const name = ${JSON.stringify(card.name)}.toLowerCase();
+      const c = [...g.querySelectorAll('.common-extension-card')]
+        .find(x => (x.querySelector('.common-extension-card-title')?.textContent || '').trim().toLowerCase() === name);
+      if (!c) return false;
+      const b = c.querySelector('button.common-card-action');
+      if (!b) return false;
+      b.click();
+      return true;
+    })()`);
+    if (!clicked) throw new Error(`could not click the gallery card for "${spec}"`);
+
+    const closed = await cdp.ev(`(async () => {
+      const sleep = ms => new Promise(r => setTimeout(r, ms));
+      const vis = e => !!(e.offsetWidth || e.offsetHeight);
+      for (let i = 0; i < 120; i++) {
+        await sleep(200);
+        const g = document.querySelector('.extensions-browser');
+        if (!g || !vis(g)) return { ok: true };
+        const modal = [...document.querySelectorAll('.ReactModal__Content, .ui.modal')]
+          .find(e => vis(e) && !e.contains(g));
+        if (modal) {
+          const text = (modal.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 300);
+          const btn = [...modal.querySelectorAll('button')]
+            .find(e => vis(e) && /^(Add|Continue|OK|Yes|Install)$/i.test((e.textContent || '').trim()));
+          if (btn) { btn.click(); continue; }
+          return { ok: false, modal: text };
+        }
+      }
+      return { ok: false, modal: null };
+    })()`, 30000);
+    if (!closed?.ok) {
+      throw new Error(`extension install did not finish${closed?.modal ? `: ${closed.modal}` : ""}`);
+    }
+  } finally {
+    await closeExtensionsGallery(cdp).catch(() => {});
+  }
+}
+
+async function waitForExtension(cdp, spec) {
+  let lastPkg = null;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    if (attempt > 0) await sleep(600);
+    const { pkg } = await readProjectPackage(cdp);
+    lastPkg = pkg;
+    const hit = findInstalledDep(pkg.dependencies || {}, spec);
+    if (hit) return { hit, pkg };
+  }
+  throw new Error(`extension "${spec}" was not added to pxt.json`);
+}
+
+async function ensureExtensions(cdp, specs) {
+  specs = [...new Set(specs.map((s) => String(s).trim()).filter(Boolean))];
+  const before = await readProjectPackage(cdp);
+  const deps = before.pkg.dependencies || {};
+  const alreadyPresent = [];
+  const pending = [];
+
+  for (const spec of specs) {
+    const hit = findInstalledDep(deps, spec);
+    if (hit) {
+      alreadyPresent.push({ requested: spec, name: hit.name, spec: hit.spec });
+      step(`Extension ${spec} already installed (${hit.name})`);
+      const tag = String(spec).match(/#([^#]+)$/);
+      if (tag && hit.spec && !String(hit.spec).includes(tag[1])) {
+        warn(`installed ${hit.name} as ${hit.spec}; requested tag #${tag[1]} was not honored`);
+      }
+    } else {
+      pending.push(spec);
+    }
+  }
+
+  const added = [];
+  let lastPkg = before.pkg;
+  for (const spec of pending) {
+    step(`Installing extension ${spec}...`);
+    await installExtensionCard(cdp, spec);
+    const { hit, pkg } = await waitForExtension(cdp, spec);
+    lastPkg = pkg;
+    added.push({ requested: spec, name: hit.name, spec: hit.spec });
+    step(`Installed extension ${spec} -> ${hit.name} ${hit.spec}`);
+    const tag = String(spec).match(/#([^#]+)$/);
+    if (tag && hit.spec && !String(hit.spec).includes(tag[1])) {
+      warn(`installed ${hit.name} as ${hit.spec}; requested tag #${tag[1]} was not honored`);
+    }
+  }
+
+  return {
+    project: lastPkg.name || null,
+    requested: specs,
+    alreadyPresent,
+    added,
+    dependencies: lastPkg.dependencies || {},
+  };
+}
+
+async function openFileExplorer(cdp) {
+  const r = await cdp.ev(`(async () => {
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    const vis = e => !!(e.offsetWidth || e.offsetHeight);
+    const toolbar = () => [...document.querySelectorAll('[aria-label="File explorer toolbar"]')].find(vis);
+    let item = toolbar();
+    if (!item) return { ok: false, error: 'file explorer not found' };
+    if (item.getAttribute('aria-expanded') === 'true') return { ok: true, already: true };
+
+    const opts = { bubbles: true, cancelable: true, composed: true, pointerId: 1, pointerType: 'mouse', isPrimary: true, button: 0, buttons: 1 };
+    item.dispatchEvent(new PointerEvent('pointerdown', opts));
+    item.dispatchEvent(new PointerEvent('pointerup', { ...opts, buttons: 0 }));
+    item.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+
+    for (let i = 0; i < 40; i++) {
+      await sleep(100);
+      item = toolbar();
+      if (item && item.getAttribute('aria-expanded') === 'true') return { ok: true };
+    }
+    return { ok: false, error: 'file explorer did not expand' };
+  })()`, 15000);
+  if (!r?.ok) throw new Error(r?.error || "could not open the file explorer");
+}
+
+async function removeExtensionEntry(cdp, name) {
+  const r = await cdp.ev(`(async () => {
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    const vis = e => !!(e.offsetWidth || e.offsetHeight);
+    const target = ${JSON.stringify(name)};
+    const visibleModals = () => [...document.querySelectorAll('.ReactModal__Content, .ui.modal')]
+      .filter(e => vis(e) && /remove/i.test(e.innerText || '') && /extension/i.test(e.innerText || ''));
+
+    const btn = [...document.querySelectorAll('button')]
+      .find(e => vis(e) && e.getAttribute('title') === 'Delete extension ' + target);
+    if (!btn) {
+      const available = [...document.querySelectorAll('button')]
+        .filter(e => vis(e) && /^Delete extension /.test(e.getAttribute('title') || ''))
+        .map(e => (e.getAttribute('title') || '').replace(/^Delete extension /, ''));
+      return { ok: false, error: 'delete button not found', available };
+    }
+    btn.click();
+
+    // The editor asks for confirmation: "Remove <name> extension ... Remove it".
+    let confirmed = false;
+    let modal = null;
+    for (let i = 0; i < 40; i++) {
+      await sleep(100);
+      modal = visibleModals()[0] || null;
+      if (!modal) continue;
+      const confirm = [...modal.querySelectorAll('button')]
+        .find(e => vis(e) && /^(Remove it|Remove)$/i.test((e.textContent || '').trim()));
+      if (confirm) {
+        confirm.click();
+        confirmed = true;
+        break;
+      }
+    }
+
+    if (modal && !confirmed) {
+      const cancel = [...modal.querySelectorAll('button')]
+        .find(e => vis(e) && /^Cancel$/i.test((e.textContent || '').trim()));
+      if (cancel) cancel.click();
+      return {
+        ok: false,
+        error: 'confirmation dialog had no Remove button',
+        modal: (modal.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 300),
+      };
+    }
+
+    for (let i = 0; i < 40; i++) {
+      await sleep(150);
+      if (!visibleModals().length) break;
+    }
+    return { ok: true, confirmed };
+  })()`, 20000);
+
+  if (!r?.ok) {
+    if (r?.error === "delete button not found" && r.available?.length) {
+      throw new Error(
+        `extension "${name}" has no delete button; explorer has: ${r.available.join(", ")}`,
+      );
+    }
+    throw new Error(
+      `could not remove extension "${name}"${r?.modal ? `: ${r.modal}` : r?.error ? `: ${r.error}` : ""}`,
+    );
+  }
+  return r;
+}
+
+async function waitForRemoval(cdp, name) {
+  let lastPkg = null;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    if (attempt > 0) await sleep(600);
+    const { pkg } = await readProjectPackage(cdp);
+    lastPkg = pkg;
+    if (!Object.prototype.hasOwnProperty.call(pkg.dependencies || {}, name)) {
+      return { pkg };
+    }
+  }
+  throw new Error(`extension "${name}" was not removed from pxt.json`);
+}
+
+async function stayInJavaScript(cdp) {
+  await cdp.ev(`(async () => {
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    const vis = e => !!(e.offsetWidth || e.offsetHeight);
+    for (let i = 0; i < 40; i++) {
+      const btn = [...document.querySelectorAll('button')]
+        .find(e => vis(e) && (e.textContent || '').trim() === 'Stay in JavaScript');
+      if (btn) {
+        btn.click();
+        await sleep(300);
+        return true;
+      }
+      await sleep(100);
+    }
+    return false;
+  })()`).catch(() => false);
+}
+
+async function ensureRemovedExtensions(cdp, specs, { restoreBlocks = false } = {}) {
+  specs = [...new Set(specs.map((s) => String(s).trim()).filter(Boolean))];
+  const wasCodeView = await cdp
+    .ev(`(() => {
+      const js = document.querySelector('[aria-label="Convert code to Blocks"]');
+      return !!document.querySelector('.monaco-editor')?.getBoundingClientRect().width && !!js;
+    })()`)
+    .catch(() => false);
+  const before = await readProjectPackage(cdp);
+  const deps = before.pkg.dependencies || {};
+  const removed = [];
+  const notPresent = [];
+  const pending = [];
+
+  for (const spec of specs) {
+    const hit = findInstalledDep(deps, spec);
+    if (!hit) {
+      notPresent.push({ requested: spec });
+      step(`Extension ${spec} is not installed`);
+    } else {
+      pending.push({ spec, name: hit.name, depSpec: hit.spec });
+    }
+  }
+
+  let lastPkg = before.pkg;
+  for (const item of pending) {
+    step(`Removing extension ${item.name}...`);
+    await ensureCodeView(cdp);
+    await openFileExplorer(cdp);
+    await removeExtensionEntry(cdp, item.name);
+    const { pkg } = await waitForRemoval(cdp, item.name);
+    lastPkg = pkg;
+    removed.push({ requested: item.spec, name: item.name, spec: item.depSpec });
+    step(`Removed extension ${item.name}`);
+  }
+
+  if (restoreBlocks) {
+    if (removed.length) {
+      try {
+        await toBlocks(cdp);
+      } catch (e) {
+        await stayInJavaScript(cdp);
+        warn(
+          `removed ${removed.map((r) => r.name).join(", ")} but could not convert back to Blocks; staying in JavaScript. Update code that used the extension.`,
+        );
+        debug(`Blocks conversion after removal failed: ${e.message}`);
+      }
+    } else if (!wasCodeView) {
+      await ensureBlocksView(cdp);
+    }
+  }
+
+  return {
+    project: lastPkg.name || null,
+    requested: specs,
+    removed,
+    notPresent,
+    dependencies: lastPkg.dependencies || {},
+  };
+}
+
+async function listProjectExtensions(cdp) {
+  const { pkg } = await readProjectPackage(cdp);
+  const deps = pkg.dependencies || {};
+  const entries = Object.entries(deps).map(([name, spec]) => ({
+    name,
+    spec,
+    kind:
+      name === "core"
+        ? "builtin"
+        : DEFAULT_DEPS.has(name)
+          ? "default"
+          : /^(github:|https?:)/i.test(String(spec))
+            ? "gallery"
+            : "bundled",
+  }));
+  return {
+    project: pkg.name || null,
+    dependencies: deps,
+    builtin: entries.filter((e) => e.kind === "builtin").map((e) => e.name),
+    defaults: entries.filter((e) => e.kind === "default").map((e) => e.name),
+    extensions: entries.filter((e) => e.kind === "gallery" || e.kind === "bundled"),
+    entries,
+  };
+}
+
+function printProjectExtensions(info) {
+  out(`Project: ${info.project || "(unnamed)"}`);
+  for (const e of info.entries) {
+    out(`  ${e.name.padEnd(18)} ${String(e.spec).padEnd(40)} ${e.kind}`);
+  }
+}
+
+function printGallerySearch(info) {
+  out(info.query ? `Extensions matching "${info.query}":` : "Recommended extensions:");
+  if (!info.results.length) out("  (none)");
+  for (const r of info.results) {
+    const mark = r.installed ? "  [installed]" : "";
+    out(`  ${String(r.name).padEnd(26)} ${String(r.description || "").slice(0, 70)}${mark}`);
+  }
+  if (info.truncated) {
+    out(`  (showing ${info.results.length} of ${info.total}; refine the query to narrow it down)`);
+  }
+}
+
+function printInstalledExtensions(info) {
+  out(`Project: ${info.project || "(unnamed)"}`);
+  for (const a of info.added) out(`  added:     ${a.requested} -> ${a.name} ${a.spec}`);
+  for (const a of info.alreadyPresent) out(`  installed: ${a.requested} (${a.name})`);
+  if (!info.added.length && !info.alreadyPresent.length) out("  (nothing to do)");
+}
+
+function printRemovedExtensions(info) {
+  out(`Project: ${info.project || "(unnamed)"}`);
+  for (const r of info.removed) out(`  removed:   ${r.requested} (${r.name})`);
+  for (const n of info.notPresent) out(`  not found: ${n.requested}`);
+  if (!info.removed.length && !info.notPresent.length) out("  (nothing to do)");
 }
 
 // ---------------------------------------------------------------------------
@@ -1281,6 +2160,17 @@ async function main() {
     out(`mbflash ${VERSION}`);
     return 0;
   }
+  if (o.skill) {
+    const file = new URL("./SKILL.md", import.meta.url);
+    try {
+      const text = fs.readFileSync(file, "utf8");
+      process.stdout.write(text.endsWith("\n") ? text : `${text}\n`);
+    } catch (e) {
+      console.error(`error: could not read SKILL.md: ${e.message}`);
+      return 1;
+    }
+    return 0;
+  }
   if (o.list) return await listTargets(o);
 
   const mode = resolveMode(o);
@@ -1302,7 +2192,10 @@ async function main() {
     } else {
       const target = parseCdpTarget(o.cdp);
       const pages = await fetchPages(target);
-      let page = await selectPage(pages, o, { allowMissingProject: !!o.project && o.create });
+      const readOnlyMode = mode === "list-extensions" || mode === "search-extensions";
+      let page = await selectPage(pages, o, {
+        allowMissingProject: !!o.project && o.create && !readOnlyMode,
+      });
       let created = false;
       let createStart = 0;
 
@@ -1344,11 +2237,91 @@ async function main() {
       const tabProject = projectName || o.project || null;
       result.tab = { id: page.id, project: tabProject, url: currentUrl };
 
+      if (mode === "list-extensions") {
+        const te = Date.now();
+        const info = await listProjectExtensions(cdp);
+        result.extensions = info;
+        result.timings.extensions = Date.now() - te;
+        result.timings.total = Date.now() - t0;
+        if (ui.json) console.log(JSON.stringify(result, null, 2));
+        else printProjectExtensions(info);
+        return 0;
+      }
+
+      if (mode === "search-extensions") {
+        const te = Date.now();
+        const info = await searchGalleryExtensions(cdp, o.searchExtensions);
+        result.extensions = info;
+        result.timings.extensions = Date.now() - te;
+        result.timings.total = Date.now() - t0;
+        if (ui.json) console.log(JSON.stringify(result, null, 2));
+        else printGallerySearch(info);
+        return 0;
+      }
+
       if (mode === "switch") {
+        if (o.extensions.length) {
+          const te = Date.now();
+          result.extensions = await ensureExtensions(cdp, o.extensions);
+          result.timings.extensions = Date.now() - te;
+          printInstalledExtensions(result.extensions);
+        }
+        if (o.removeExtensions.length) {
+          const te = Date.now();
+          result.extensions = await ensureRemovedExtensions(cdp, o.removeExtensions, {
+            restoreBlocks: true,
+          });
+          result.timings.extensions = Date.now() - te;
+          printRemovedExtensions(result.extensions);
+        }
         out(`switched to ${tabProject || page.id} (${page.id})`);
         result.timings.total = Date.now() - t0;
         if (ui.json) console.log(JSON.stringify(result, null, 2));
         return 0;
+      }
+
+      if (mode === "install") {
+        const te = Date.now();
+        result.extensions = await ensureExtensions(cdp, o.extensions);
+        result.timings.extensions = Date.now() - te;
+        result.timings.total = Date.now() - t0;
+        if (ui.json) {
+          console.log(JSON.stringify(result, null, 2));
+        } else {
+          printInstalledExtensions(result.extensions);
+          out(`total:  ${fmt(result.timings.total)}`);
+        }
+        return 0;
+      }
+
+      if (mode === "remove") {
+        const te = Date.now();
+        result.extensions = await ensureRemovedExtensions(cdp, o.removeExtensions, {
+          restoreBlocks: true,
+        });
+        result.timings.extensions = Date.now() - te;
+        result.timings.total = Date.now() - t0;
+        if (ui.json) {
+          console.log(JSON.stringify(result, null, 2));
+        } else {
+          printRemovedExtensions(result.extensions);
+          out(`total:  ${fmt(result.timings.total)}`);
+        }
+        return 0;
+      }
+
+      if (o.extensions.length) {
+        const te = Date.now();
+        result.extensions = await ensureExtensions(cdp, o.extensions);
+        result.timings.extensions = Date.now() - te;
+        printInstalledExtensions(result.extensions);
+      }
+
+      if (o.removeExtensions.length) {
+        const te = Date.now();
+        result.extensions = await ensureRemovedExtensions(cdp, o.removeExtensions);
+        result.timings.extensions = Date.now() - te;
+        printRemovedExtensions(result.extensions);
       }
 
       let blocks = null;

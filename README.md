@@ -12,8 +12,9 @@ actually use in MakeCode: an agent writes ordinary TypeScript, mbflash pushes it
 into a live editor tab, and the program reappears as Blocks.
 
 From there mbflash can compile and download the `.hex` and flash it by writing
-to the `MICROBIT` volume, so there is no WebUSB pairing step. The CLI itself is
-dependency-free and talks to the browser over CDP.
+to the `MICROBIT` volume, so there is no WebUSB pairing step. It can also
+search, list and install MakeCode extensions through the editor before loading
+code. The CLI itself is dependency-free and talks to the browser over CDP.
 
 ```sh
 mbflash main.ts
@@ -78,6 +79,10 @@ The package has no runtime dependencies and requires Node.js **22.4+**.
 | `mbflash --flash-only` | build/flash the code already in the editor |
 | `mbflash --flash-hex demo.hex` | flash an existing `.hex` (no CDP) |
 | `mbflash --project Test1 --switch` | focus the Test1 project (no build) |
+| `mbflash --list-extensions` | list the project's dependencies |
+| `mbflash --search-extensions servo` | search the live extension gallery |
+| `mbflash --extension servo main.ts` | ensure installed → load → build → flash |
+| `mbflash --remove-extension servo` | remove an extension from the project |
 
 `--hex-only` with no file is useful when a human has edited Blocks and you just
 want a `.hex`. `--flash-only` skips loading but still builds. `--switch` is the
@@ -133,6 +138,51 @@ Practical notes for multiple projects:
   tab per project and verify that the IDB workspace is not being shared.
 - Only one board mount is used by default. For multiple boards, pass a different
   `--device` per project.
+
+## Extensions
+
+`mbflash` drives the editor's own Extensions dialog, so extensions can be
+searched, listed and installed with just a CDP-enabled browser. There is no
+`pxt`/`mkc` dependency and no separate package manager.
+
+```sh
+mbflash --list-extensions                 # project dependencies
+mbflash --search-extensions servo         # live gallery search
+mbflash --extension servo main.ts         # install, then load/build/flash
+mbflash --project Demo --extension servo --extension neopixel main.ts
+mbflash --project Demo --extension github:microsoft/pxt-max6675 --switch
+mbflash --project Demo --remove-extension servo --switch
+mbflash --project Demo --remove-extension servo --remove-extension neopixel main.ts
+```
+
+- `--extension <spec>` is repeatable and idempotent. It runs **before** the
+  source is loaded, so `main.ts` can use the extension's TypeScript API on the
+  first try. A missing extension is installed through the gallery and verified
+  against `pxt.json`.
+- A plain name (`servo`, `neopixel`) searches the gallery by name. A
+  `github:owner/repo` or GitHub URL spec opens the package through the gallery;
+  the installed dependency is pinned to the gallery's release (for example
+  `github:microsoft/pxt-neopixel#v0.7.6`). A requested `#tag` is best-effort:
+  mbflash warns if the gallery installed a different version.
+- `--list-extensions` marks `core` as builtin, `radio`/`microphone` as default
+  dependencies, and everything else as `bundled` or `gallery`. `--json` returns
+  the same information as an object.
+- `--search-extensions` returns up to 25 results, ranked by exact name, prefix,
+  then substring, with a `total` and `truncated` count in `--json` mode.
+- `--remove-extension <spec>` is repeatable and idempotent. It uses the editor's
+  documented removal flow: switch to JavaScript view, open Explorer, click the
+  extension's trash button, and confirm **Remove it**. It verifies the
+  dependency is gone from `pxt.json`, then returns to Blocks if the code has no
+  TypeScript errors. If code still references the removed extension it stays in
+  JavaScript view and warns; update the code or load a new `main.ts`. Removing an
+  extension that is still in use will break the build. `--extension` and
+  `--remove-extension` are mutually exclusive.
+- Extension installs are in-memory like the rest of the session-only workspace:
+  a page reload loses them. Keep `--extension` in the command (or use a
+  persistent workspace) when a run must be reproducible.
+- Installing an extension does not make it safe for the board. V2-only
+  extensions (for example `datalogger`) install cleanly on a V1 project and can
+  still panic at runtime.
 
 ## Options
 
@@ -190,8 +240,19 @@ mbflash --quiet main.ts        # print only the hex path (or "ok")
 ```
 
 `--json` prints a single object on stdout with `ok`, `mode`, `hex`, `device`,
-`markers`, `blocks`, `roundtrip`, `warnings`, and `timings`. On failure it
-prints `{ "ok": false, "error": "...", "timings": ... }` and exits non-zero.
+`markers`, `blocks`, `roundtrip`, `extensions`, `warnings`, and `timings`. On
+failure it prints `{ "ok": false, "error": "...", "timings": ... }` and exits
+non-zero.
+
+### Skill
+
+```sh
+mbflash --skill > SKILL.md     # print the bundled agent skill
+```
+
+`--skill` writes the canonical `SKILL.md` that ships with mbflash to stdout. It
+needs no browser or board and is the easiest way to install or refresh the agent
+instructions for this tool.
 
 ## Examples
 
@@ -225,6 +286,11 @@ mbflash --cdp 127.0.0.1:9333 --target <id> main.ts
 - **Session-only projects.** Some profiles keep the project only in page
   memory. The CLI still works, but the project is lost on reload; keep the
   `main.ts` and `.hex` on disk.
+- **Extensions.** `--extension` installs through the editor's Extensions
+  dialog and verifies `pxt.json` before loading the source;
+  `--remove-extension` removes through the JavaScript Explorer and verifies
+  `pxt.json` afterwards. Extension state is session-only too; pass the flags on
+  every run for reproducibility.
 - **V1 vs V2.** The CLI flashes what you give it. V2-only APIs (logo touch,
   `input.soundLevel`, audio) compile for a V1 board and then panic with code
   **927** at boot. Check the board version before using those APIs.
@@ -250,9 +316,9 @@ npm run lint        # node --check
 npm pack --dry-run  # inspect the npm package contents
 ```
 
-The test suite covers argument parsing, project/title semantics, and hex
-validation. Browser/CDP loading and flashing require a real MakeCode tab and a
-mounted micro:bit.
+The test suite covers argument parsing (including extension flags), project/title
+semantics, and hex validation. Browser/CDP loading, extension installation and
+flashing require a real MakeCode tab and a mounted micro:bit.
 
 ## Publishing
 
@@ -270,4 +336,4 @@ skips publishing when the version already exists on npm; otherwise it publishes
 with the OIDC trusted publisher configured for this repository on npmjs.com, so
 no npm secret is stored in GitHub. Keep the repository public for npm
 provenance. `npm pack --dry-run` shows exactly what would be published:
-`mbflash.mjs`, `README.md`, `LICENSE`, and `package.json`.
+`mbflash.mjs`, `README.md`, `SKILL.md`, `LICENSE`, and `package.json`.
